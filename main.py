@@ -41,14 +41,14 @@ app = Microdot()
 _last_command_time = 0
 IDLE_TIMEOUT = 5  # seconds of silence before reverting to server IP
 
-def _on_command(request, label):
+def _on_command(request, label, icon=None):
     global _last_command_time
     _last_command_time = time.time()
     try:
         client_ip = request.client_addr[0]
     except Exception:
         client_ip = "?"
-    display.update_display(header=client_ip, text=label)
+    display.update_display(header=client_ip, text=label, icon=icon)
 
 async def _idle_watcher():
     global _last_command_time
@@ -126,15 +126,27 @@ def api_text(request):
     try:
         data = json.loads(request.body.decode('utf-8'))
         text = str(data.get('text', ''))
-        _on_command(request, text if text else "(clear)")
+        icon = data.get('icon') or None
+        _on_command(request, text if text else "(clear)", icon=icon)
         response_data = {'success': True, 'message': f'Displayed: {text}'}
-        print(f"Displayed text: {text}")
+        print(f"Displayed text: {text}, icon: {icon}")
     except Exception as e:
         response_data = {'success': False, 'message': f'Text error: {e}'}
         print(f"Text error: {e}")
     finally:
         led.off()
     return create_cors_response(response_data)
+
+@app.route('/api/icons')
+def api_icons(_request):
+    try:
+        with open('icons.json') as f:
+            data = json.load(f)
+        icon_names = sorted(data.keys())
+    except Exception as e:
+        print(f"icons.json read error: {e}")
+        icon_names = []
+    return create_cors_response({'success': True, 'icons': icon_names})
 
 @app.route('/api/status')
 def api_status(request):
@@ -178,6 +190,7 @@ async def start_server():
         print("WiFi not connected - server will run on localhost only")
         display.update_display(header="Server Ready", text="WiFi Failed")
     asyncio.create_task(payload_sensor.monitor())
+    asyncio.create_task(_idle_watcher())
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)
     except KeyboardInterrupt:

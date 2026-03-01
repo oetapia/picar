@@ -3,3 +3,6 @@ secrets.py
 
 #venv
 venv/
+
+#mac
+.DS_Store

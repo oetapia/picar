@@ -37,6 +37,30 @@ else:
 # ========== Microdot API Server ==========
 app = Microdot()
 
+# ========== Display Helpers ==========
+_last_command_time = 0
+IDLE_TIMEOUT = 5  # seconds of silence before reverting to server IP
+
+def _on_command(request, label):
+    global _last_command_time
+    _last_command_time = time.time()
+    try:
+        client_ip = request.client_addr[0]
+    except Exception:
+        client_ip = "?"
+    display.update_display(header=client_ip, text=label)
+
+async def _idle_watcher():
+    global _last_command_time
+    while True:
+        await asyncio.sleep(1)
+        if _last_command_time and time.time() - _last_command_time >= IDLE_TIMEOUT:
+            _last_command_time = 0
+            if wlan and wlan.isconnected():
+                display.update_display(header="Server Ready", text=f"{ip_address}:5000")
+            else:
+                display.update_display(header="Server Ready", text="WiFi Failed")
+
 def create_cors_response(data, status_code=200):
     response = Response(json.dumps(data), status_code=status_code)
     response.headers['Content-Type'] = 'application/json'
@@ -61,6 +85,7 @@ def api_motor(request, speed):
     try:
         motor.current_motor_speed = max(-100, min(100, speed))
         motor.update_motor()
+        _on_command(request, f"Motor: {motor.current_motor_speed}")
         response_data = {
             'success': True,
             'motor_speed': motor.current_motor_speed,
@@ -81,7 +106,7 @@ def api_servo(request, angle):
         angle = max(0, min(180, angle))
         servo.current_angle = angle - 90  # Convert to internal -90:90 range
         servo.set_servo_angle(angle)
-        servo.display_servo()
+        _on_command(request, f"Servo: {angle}")
         response_data = {
             'success': True,
             'servo_angle': angle,
@@ -101,7 +126,7 @@ def api_text(request):
     try:
         data = json.loads(request.body.decode('utf-8'))
         text = str(data.get('text', ''))
-        display.update_display(header="HTTP API", text=text)
+        _on_command(request, text if text else "(clear)")
         response_data = {'success': True, 'message': f'Displayed: {text}'}
         print(f"Displayed text: {text}")
     except Exception as e:

@@ -126,10 +126,15 @@ def api_sensors(request):
     state = payload_sensor.get_state()
     response_data = {
         'success': True,
-        'left_front': state['left_front'],
+        'left_front':  state['left_front'],
         'right_front': state['right_front'],
-        'timestamp': state['timestamp'],
-        'message': f'Left: {state["left_front"]}, Right: {state["right_front"]}'
+        'left_back':   state['left_back'],
+        'right_back':  state['right_back'],
+        'timestamp':   state['timestamp'],
+        'message': 'LF:{} RF:{} LB:{} RB:{}'.format(
+            state['left_front'], state['right_front'],
+            state['left_back'],  state['right_back']
+        )
     }
     return create_cors_response(response_data)
 

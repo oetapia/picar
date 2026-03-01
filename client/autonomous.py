@@ -7,12 +7,14 @@ import time
 from picar_client import PicarClient
 
 # ── driving parameters ───────────────────────────────────────────────
-DRIVE_SPEED   =  65
-REVERSE_SPEED = -65
-STEER_LEFT    =  50   # servo angle: left turn
-STEER_RIGHT   = 130   # servo angle: right turn
-CENTRE        =  90
-POLL_INTERVAL =  0.1  # seconds between sensor polls
+DRIVE_SPEED       =  55   # normal cruising speed
+CORRECTION_SPEED  =  35   # slower speed while steering around an obstacle
+REVERSE_SPEED     = -50
+STEER_LEFT        =  50   # servo angle: left turn
+STEER_RIGHT       = 130   # servo angle: right turn
+CENTRE            =  90
+POLL_INTERVAL     =  0.1  # seconds between sensor polls
+CORRECTION_HOLD   =  0.5  # seconds to hold a correction before re-polling
 
 
 class AutonomousDriver:
@@ -47,12 +49,14 @@ class AutonomousDriver:
         while self.autonomous:
             try:
                 sensors = self.client.get_sensors()
-                left  = sensors.get("left_front",  False)
-                right = sensors.get("right_front", False)
-                state = (left, right)
+                left_front  = sensors.get("left_front",  False)
+                right_front = sensors.get("right_front", False)
+                left_back   = sensors.get("left_back",   False)
+                right_back  = sensors.get("right_back",  False)
+                state = (left_front, right_front, left_back, right_back)
 
                 if state != self._last_state:
-                    self._react(left, right)
+                    self._react(left_front, right_front, left_back, right_back)
                     self._last_state = state
 
             except Exception as e:
@@ -62,26 +66,34 @@ class AutonomousDriver:
 
             time.sleep(POLL_INTERVAL)
 
-    def _react(self, left: bool, right: bool):
+    def _react(self, left: bool, right: bool, left_back: bool, right_back: bool):
         """Adjust motor and servo based on the current sensor state."""
         if left and right:
-            # Dead end — reverse and swing right to escape
-            self.client.set_motor(REVERSE_SPEED)
-            self.client.set_servo(STEER_RIGHT)
-            print("\rBoth blocked — reversing       ")
-            time.sleep(0.7)
-            if self.autonomous:
+            if left_back or right_back:
+                # Blocked front and back — stop and wait
+                self.client.set_motor(0)
                 self.client.centre()
+                print("\rFully blocked — stopping       ")
+            else:
+                # Dead end — reverse and swing right to escape
+                self.client.set_motor(REVERSE_SPEED)
+                self.client.set_servo(STEER_RIGHT)
+                print("\rBoth blocked — reversing       ")
+                time.sleep(0.7)
+                if self.autonomous:
+                    self.client.centre()
         elif left:
-            # Obstacle on left → steer right
+            # Obstacle on left → slow down, steer right, hold until clear
+            self.client.set_motor(CORRECTION_SPEED)
             self.client.set_servo(STEER_RIGHT)
-            self.client.set_motor(DRIVE_SPEED)
             print("\rLeft blocked — turning right   ")
+            time.sleep(CORRECTION_HOLD)
         elif right:
-            # Obstacle on right → steer left
+            # Obstacle on right → slow down, steer left, hold until clear
+            self.client.set_motor(CORRECTION_SPEED)
             self.client.set_servo(STEER_LEFT)
-            self.client.set_motor(DRIVE_SPEED)
             print("\rRight blocked — turning left   ")
+            time.sleep(CORRECTION_HOLD)
         else:
             # All clear → straight ahead
             self.client.set_servo(CENTRE)
@@ -156,10 +168,12 @@ def main():
                     r = client.centre()
                     print(f"\rCentre: {r.get('message', '')}")
                 elif key == "i":
-                    r = client.get_sensors()
-                    l  = "BLOCKED" if r.get("left_front")  else "clear"
-                    ri = "BLOCKED" if r.get("right_front") else "clear"
-                    print(f"\rIR — left: {l}, right: {ri}")
+                    r  = client.get_sensors()
+                    lf = "BLOCKED" if r.get("left_front")  else "clear"
+                    rf = "BLOCKED" if r.get("right_front") else "clear"
+                    lb = "BLOCKED" if r.get("left_back")   else "clear"
+                    rb = "BLOCKED" if r.get("right_back")  else "clear"
+                    print(f"\rIR — front L:{lf} R:{rf}  back L:{lb} R:{rb}")
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 

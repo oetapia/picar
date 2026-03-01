@@ -42,7 +42,7 @@ class PicarClient:
         return self._get("/api/status")
 
     def get_sensors(self) -> dict:
-        """Get IR sensor state (left_front, right_front, timestamp)."""
+        """Get IR sensor state (left_front, right_front, left_back, right_back, timestamp)."""
         return self._get("/api/sensors")
 
     def stop(self) -> dict:
@@ -66,9 +66,11 @@ def main():
         return
 
     def fmt_sensors(r):
-        l = "BLOCKED" if r.get("left_front") else "clear"
-        ri = "BLOCKED" if r.get("right_front") else "clear"
-        return f"IR sensors — left: {l}, right: {ri}"
+        lf = "BLOCKED" if r.get("left_front")  else "clear"
+        rf = "BLOCKED" if r.get("right_front") else "clear"
+        lb = "BLOCKED" if r.get("left_back")   else "clear"
+        rb = "BLOCKED" if r.get("right_back")  else "clear"
+        return f"IR — front L:{lf} R:{rf}  back L:{lb} R:{rb}"
 
     commands = {
         "w": ("Forward",       lambda: client.set_motor(75)),

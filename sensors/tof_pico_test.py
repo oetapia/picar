@@ -13,8 +13,8 @@ import machine
 import time
 from vl53l0x_mp import VL53L0X, VL53L0XError
 
-SDA_PIN = 0
-SCL_PIN = 1
+SDA_PIN = 20
+SCL_PIN = 21
 # SoftI2C is more forgiving than hardware I2C for the VL53L0X:
 # it issues a clean STOP between every write/read and is less strict
 # about clock timing than the RP2040 hardware I2C peripheral.

@@ -11,9 +11,9 @@ import display
 
 # ========== VL53L0X Configuration ==========
 VL53L0X_I2C_ADDR = 0x29  # Default I2C address
-I2C_BUS = 1              # I2C1 (shared with OLED)
-SDA_PIN = 18             # GP18
-SCL_PIN = 19             # GP19
+I2C_BUS = 0              # I2C1 (shared with OLED)
+SDA_PIN = 20             # GP18
+SCL_PIN = 21             # GP19
 
 # VL53L0X Register Addresses
 REG_IDENTIFICATION_MODEL_ID = 0xC0

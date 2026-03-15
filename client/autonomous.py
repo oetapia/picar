@@ -15,11 +15,11 @@ CRAWL_SPEED        =  12   # very slow (was 15)
 REVERSE_FAST       = -35   # fast reverse (was -40)
 REVERSE_SLOW       = -22   # slow reverse (was -25)
 
-# Steering angles
-STEER_LEFT         =  0   # hard left
-STEER_SLIGHT_LEFT  =  35   # gentle left nudge
-STEER_RIGHT        = 180   # hard right
-STEER_SLIGHT_RIGHT = 145   # gentle right nudge
+# Steering angles - INCREASED for sharper turns (compensate for understeer)
+STEER_LEFT         =  35   # hard left (was 50 - sharper turn)
+STEER_SLIGHT_LEFT  =  65   # gentle left nudge (was 75)
+STEER_RIGHT        = 145   # hard right (was 130 - sharper turn)
+STEER_SLIGHT_RIGHT = 115   # gentle right nudge (was 105)
 CENTRE             =  90
 
 # Timing - AGGRESSIVE POLLING to minimize lag
@@ -28,17 +28,18 @@ POLL_INTERVAL      =  0.05 # FASTER: check every 2cm at cruise (was 0.08)
 # ── distance thresholds (cm) - ANTI-LAG: LARGER MARGINS ──────────────
 # CRITICAL: Increased thresholds to account for 250-400ms total lag
 # At 40cm/s cruise: car travels 16cm during reaction delay!
-EMERGENCY_STOP_DIST = 50   # 🚨 IMMEDIATE STOP - no questions asked
+# SAME EMERGENCY THRESHOLD FOR BOTH DIRECTIONS
+EMERGENCY_STOP_DIST = 50   # 🚨 IMMEDIATE STOP - front OR rear, no questions asked
 VERY_SAFE_DIST      = 90   # full cruise speed safe (was 80)
 SAFE_DIST           = 60   # medium speed zone (was 50)
 CAUTION_DIST        = 45   # slow speed zone (was 30) 
 DANGER_DIST         = 35   # crawl speed (was 25)
-CRITICAL_DIST       = 25   # must reverse NOW (was 20)
+CRITICAL_DIST       = 25   # must change direction NOW (was 20)
 
-# Rear distance zones - also increased
-REAR_SAFE_DIST      = 55   # safe to reverse at speed (was 50)
-REAR_CAUTION_DIST   = 35   # slow reverse only (was 30)
-REAR_DANGER_DIST    = 25   # cannot reverse safely (was 20)
+# Rear distance zones - MATCHED to front for consistency
+REAR_SAFE_DIST      = 60   # safe to reverse at speed (was 55, match SAFE_DIST)
+REAR_CAUTION_DIST   = 45   # slow reverse only (was 35, match CAUTION_DIST)
+REAR_DANGER_DIST    = 35   # cannot reverse safely (was 25, match DANGER_DIST)
 
 # Velocity tracking for predictive collision detection
 APPROACH_RATE_THRESHOLD = 15  # cm/s - if closing faster than this, pre-brake
@@ -62,14 +63,15 @@ class AutonomousDriver:
     4. No blocking operations - continuous sensor monitoring
     5. Instant direction changes when needed
     
-    ANTI-LAG Distance Zones (accounting for full lag chain):
+    ANTI-LAG Distance Zones (SAME for front AND rear):
     ────────────────────────────────────────────────────
-    < 50cm: EMERGENCY    → immediate stop (pre-emptive)
-    > 90cm: VERY SAFE    → cruise speed (35%)
-    60-90cm: SAFE        → medium speed (25%)
-    45-60cm: CAUTION     → slow speed (18%)
+    < 50cm: EMERGENCY    → immediate stop (both directions)
+    > 90cm: VERY SAFE    → cruise speed forward (35%)
+    > 60cm: REAR_SAFE    → fast reverse OK (-35%)
+    60-90cm: SAFE        → medium forward (25%)
+    45-60cm: CAUTION     → slow forward/reverse (18%/-22%)
     35-45cm: DANGER      → crawl speed (12%)
-    < 35cm: CRITICAL     → must reverse
+    < 35cm: CRITICAL     → must change direction
     
     Lag Analysis (Total: 250-400ms):
     - Sensor read: 20-50ms
@@ -88,6 +90,7 @@ class AutonomousDriver:
         self._last_front_dist = None
         self._last_measurement_time = None
         self._emergency_stop_active = False
+        self._display_update_counter = 0  # Throttle display updates
 
     # ── public controls ──────────────────────────────────────────────
 
@@ -97,8 +100,16 @@ class AutonomousDriver:
         self.autonomous = True
         self._last_action_time = time.time()
         self._current_direction = "stopped"
+        self._display_update_counter = 0
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        
+        # Display startup message
+        try:
+            self.client.send_text("AUTO MODE\nStarting...")
+        except:
+            pass
+        
         print("\r🚗 Autonomous ON - Bidirectional Navigation")
         print("\r   Physics-based collision avoidance active")
 
@@ -107,6 +118,13 @@ class AutonomousDriver:
         self.client.stop()
         self.client.centre()
         self._current_direction = "stopped"
+        
+        # Clear display
+        try:
+            self.client.send_text("AUTO MODE\nStopped")
+        except:
+            pass
+        
         print("\r🛑 Autonomous OFF - Vehicle stopped")
 
     # ── sensor loop (background thread) ─────────────────────────────
@@ -156,11 +174,22 @@ class AutonomousDriver:
                 self._last_front_dist = front_clearance
                 self._last_measurement_time = current_time
                 
-                # 🚨 EMERGENCY STOP LOGIC - HIGHEST PRIORITY
-                # If moving forward and front obstacle too close - STOP IMMEDIATELY
+                # 🚨 EMERGENCY STOP LOGIC - HIGHEST PRIORITY FOR BOTH DIRECTIONS
+                
+                # Forward emergency stop
                 if self._current_direction == "forward" and front_clearance < EMERGENCY_STOP_DIST:
                     if not self._emergency_stop_active:
                         print(f"\r🚨 EMERGENCY STOP! Front:{front_clearance:.0f}cm - TOO CLOSE!")
+                        self.client.stop()  # IMMEDIATE STOP
+                        self._emergency_stop_active = True
+                        self._current_direction = "stopped"
+                        time.sleep(0.1)  # Brief pause to ensure stop command processed
+                        continue
+                
+                # Reverse emergency stop - SAME LOGIC FOR REAR
+                if self._current_direction == "backward" and rear_dist < EMERGENCY_STOP_DIST:
+                    if not self._emergency_stop_active:
+                        print(f"\r🚨 EMERGENCY STOP REVERSE! Rear:{rear_dist:.0f}cm - TOO CLOSE!")
                         self.client.stop()  # IMMEDIATE STOP
                         self._emergency_stop_active = True
                         self._current_direction = "stopped"
@@ -173,9 +202,15 @@ class AutonomousDriver:
                     self.client.set_motor(CRAWL_SPEED)  # Immediate slow down
                     time.sleep(0.05)
                 
-                # Reset emergency flag if cleared
-                if front_clearance > EMERGENCY_STOP_DIST + 10:
+                # Reset emergency flag if both directions cleared
+                if front_clearance > EMERGENCY_STOP_DIST + 10 and rear_dist > EMERGENCY_STOP_DIST + 10:
                     self._emergency_stop_active = False
+                
+                # Update OLED display every 4 loops (~0.2s) to avoid lag
+                self._display_update_counter += 1
+                if self._display_update_counter >= 4:
+                    self._display_update_counter = 0
+                    self._update_display(left_dist, right_dist, rear_dist, front_clearance)
                 
                 # Make navigation decision (no blocking operations)
                 self._navigate(left_dist, right_dist, rear_dist, approach_rate)
@@ -218,11 +253,19 @@ class AutonomousDriver:
             return
         
         # If emergency stop was triggered, must clear to much safer distance before resuming
-        if self._emergency_stop_active and front_clearance < SAFE_DIST:
-            # Still too close after emergency stop - must reverse
-            if rear_clearance > REAR_CAUTION_DIST:
+        if self._emergency_stop_active:
+            # Check which direction triggered it and recover appropriately
+            if front_clearance < SAFE_DIST and rear_clearance > REAR_CAUTION_DIST:
+                # Front too close - must reverse
                 self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
-            return
+                return
+            elif rear_clearance < REAR_SAFE_DIST and front_clearance > SAFE_DIST:
+                # Rear too close - must move forward
+                self._move_forward(left_dist, right_dist, CRAWL_SPEED, "RECOVER")
+                return
+            elif front_clearance < SAFE_DIST and rear_clearance < REAR_SAFE_DIST:
+                # Both still too close - stay stopped
+                return
         
         # DECISION: Choose best direction based on clearance
         # Note: Thresholds are now LARGER to account for lag
@@ -307,7 +350,20 @@ class AutonomousDriver:
         print(f"\r🟢 {mode} {steer_label} L:{left_dist:.0f} R:{right_dist:.0f} [{speed}%]", end="")
 
     def _move_backward(self, left_dist: float, right_dist: float, rear_dist: float, speed: int):
-        """Move backward with steering away from front obstacles."""
+        """Move backward with steering away from front obstacles - ANTI-LAG: safety checks."""
+        # CRITICAL: Don't reverse if rear is too close (emergency zone)
+        if rear_dist < EMERGENCY_STOP_DIST:
+            # Too close to reverse - emergency stop should have caught this
+            if self._current_direction == "backward":
+                self.client.stop()
+                self._current_direction = "stopped"
+                print(f"\r🚨 ABORT REVERSE! Rear:{rear_dist:.0f}cm", end="")
+            return
+        
+        # Reduce speed if rear is getting close
+        if rear_dist < REAR_CAUTION_DIST:
+            speed = min(speed, -18)  # Cap at slow reverse speed
+        
         # Steer to open up escape angle for next forward movement
         if abs(left_dist - right_dist) > 10:
             if left_dist < right_dist:
@@ -329,6 +385,46 @@ class AutonomousDriver:
         
         print(f"\r🔵 REVERSE {steer_label} Rear:{rear_dist:.0f}cm [{speed}%]", end="")
 
+    def _update_display(self, left_dist: float, right_dist: float, rear_dist: float, front_clearance: float):
+        """Update OLED display with sensor distances - non-blocking."""
+        try:
+            # Format distances for display
+            left_str = f"{left_dist:.0f}" if left_dist < 200 else "---"
+            right_str = f"{right_dist:.0f}" if right_dist < 200 else "---"
+            rear_str = f"{rear_dist:.0f}" if rear_dist < 200 else "---"
+            
+            # Determine status emoji/symbol
+            if self._emergency_stop_active:
+                status = "STOP!"
+            elif front_clearance > VERY_SAFE_DIST:
+                status = "CRUISE"
+            elif front_clearance > SAFE_DIST:
+                status = "MEDIUM"
+            elif front_clearance > CAUTION_DIST:
+                status = "SLOW"
+            elif front_clearance > DANGER_DIST:
+                status = "CRAWL"
+            else:
+                status = "DANGER"
+            
+            # Build display text (4 lines max for typical OLED)
+            display_text = f"AUTO: {status}\n"
+            display_text += f"F: L{left_str} R{right_str}\n"
+            display_text += f"Rear: {rear_str}cm\n"
+            
+            # Add direction indicator
+            if self._current_direction == "forward":
+                display_text += "Dir: FWD"
+            elif self._current_direction == "backward":
+                display_text += "Dir: REV"
+            else:
+                display_text += "Dir: ---"
+            
+            # Send to display (non-blocking, don't wait for response)
+            self.client.send_text(display_text)
+        except:
+            # Silently fail - don't let display errors affect navigation
+            pass
 
 
 def main():

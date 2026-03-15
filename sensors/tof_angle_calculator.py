@@ -277,20 +277,12 @@ def demonstrate_calculations():
 
 
 if __name__ == '__main__':
-    print("\nSelect mode:")
-    print("1. Run live angle calculator test")
-    print("2. Show calculation examples")
+    # For MicroPython, just run the live test directly
+    # input() is not available in MicroPython REPL
+    print("\nToF Angle Calculator")
+    print("Running live test mode...")
     print()
+    test_angle_calculator()
     
-    try:
-        choice = input("Enter choice (1 or 2): ").strip()
-        print()
-        
-        if choice == '1':
-            test_angle_calculator()
-        elif choice == '2':
-            demonstrate_calculations()
-        else:
-            print("Invalid choice, running live test...")
-            test_angle_calculator()
-    except:
+    # To run examples instead, comment above and uncomment below:
+    # demonstrate_calculations()

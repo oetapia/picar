@@ -202,10 +202,8 @@ class AutonomousDriver:
         elif hooks.should_emergency_reverse(front_clearance, rear_clearance):
             self._move_backward(left, right, rear_clearance, hooks.REVERSE_SLOW)
         
-        elif rear_clearance > hooks.REAR_DANGER_DIST:
-            self._move_backward(left, right, rear_clearance, hooks.REVERSE_SLOW)
-        
         else:
+            # No safe forward movement and not critical enough for reverse - STOP
             if self._current_direction != "stopped":
                 hooks.execute_stop(self.client)
                 self._current_direction = "stopped"

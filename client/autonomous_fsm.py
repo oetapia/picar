@@ -336,9 +336,7 @@ class AutonomousFSM:
             return NavigationState.TACTICAL_REVERSE
         
         else:
-            # No safe forward movement - try reverse if rear clear
-            if rc > hooks.REAR_DANGER_DIST:
-                return NavigationState.TACTICAL_REVERSE
+            # No safe forward movement and not critical enough for reverse - STOP
             return NavigationState.STOPPED
     
     # ═══════════════════════════════════════════════════════════════

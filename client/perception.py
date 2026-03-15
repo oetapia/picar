@@ -403,12 +403,17 @@ def parse_imu_state(imu_state: dict) -> Optional[IMUData]:
     Parse IMU state dictionary into IMUData object.
     
     Args:
-        imu_state: Dictionary from accelerometer.get_state()
+        imu_state: Dictionary from client.get_accelerometer() API
     
     Returns:
         IMUData object or None if unavailable
     """
-    if not imu_state or not imu_state.get('available'):
+    if not imu_state:
+        return None
+    
+    # Check if IMU is available (handle both 'available' and 'success' keys)
+    is_available = imu_state.get('available', imu_state.get('success', False))
+    if not is_available:
         return None
     
     try:
@@ -425,7 +430,10 @@ def parse_imu_state(imu_state: dict) -> Optional[IMUData]:
             available=True,
             timestamp=imu_state.get('timestamp', time.time())
         )
-    except (KeyError, TypeError):
+    except (KeyError, TypeError) as e:
+        # Debug: print what keys we actually got
+        print(f"Debug: Failed to parse IMU data. Keys present: {list(imu_state.keys())}")
+        print(f"Debug: Error: {e}")
         return None
 
 

@@ -1,7 +1,8 @@
 import requests
 import time
+import secrets
 
-PICO_IP = "192.168.178.30"
+PICAR_IP = secrets.car_ip 
 BASE_URL = f"http://{PICO_IP}:5000"
 
 

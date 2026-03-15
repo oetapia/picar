@@ -1,13 +1,19 @@
 """
-Autonomous Navigation - Refactored to Use Hooks
+Autonomous Navigation - Perception-Powered
 
-This is the refactored version that uses autonomous_hooks.py for all logic.
+Enhanced with perception system for:
+- Sensor fusion with confidence weighting
+- IMU-validated motion detection
+- Obstacle tracking with velocity
+- Predictive collision avoidance
+
 The original monolithic version is preserved in autonomous_legacy.py.
 
 Key improvements:
-- Uses shared hooks for logic
+- Uses perception system for advanced sensor fusion
+- IMU integration prevents false obstacle detection
+- Obstacle velocity tracking for better prediction
 - Much smaller file (~300 lines vs 600)
-- Same behavior and interface
 - Easier to maintain (fix bugs in hooks, both versions benefit)
 """
 
@@ -60,8 +66,8 @@ class AutonomousDriver:
         except:
             pass
         
-        print("\r🚗 Autonomous ON - Using Hooks")
-        print("\r   Shared logic with FSM version")
+        print("\r🚗 Autonomous ON - Perception-Powered")
+        print("\r   Sensor fusion + IMU + Obstacle tracking active")
 
     def stop(self):
         """Stop autonomous navigation."""
@@ -77,41 +83,33 @@ class AutonomousDriver:
         print("\r🛑 Autonomous OFF - Vehicle stopped")
 
     def _loop(self):
-        """Main navigation loop."""
+        """Main navigation loop with perception system."""
         while self.autonomous:
             loop_start = time.time()
             
             try:
-                # Read sensors using hooks
-                left, right, tof_success = hooks.read_tof_sensors(self.client)
-                if not tof_success:
-                    print("\r⚠️  ToF sensors unavailable")
+                # Read all sensors via perception system
+                perception_state = hooks.read_perception_state(self.client)
+                if perception_state is None:
+                    print("\r⚠️  Critical sensors unavailable")
                     hooks.execute_stop(self.client)
                     time.sleep(0.5)
                     continue
                 
-                rear, _ = hooks.read_ultrasonic_sensor(self.client)
+                # Extract basic values for compatibility
+                left = perception_state.obstacles[0].distance if len([o for o in perception_state.obstacles if o.direction == 'front_left']) > 0 else 999
+                right = perception_state.obstacles[0].distance if len([o for o in perception_state.obstacles if o.direction == 'front_right']) > 0 else 999
+                rear = perception_state.rear_clearance
+                front_clearance = perception_state.front_clearance
                 
-                # Calculate clearances
-                front_clearance, rear_clearance = hooks.calculate_clearances(left, right, rear)
+                # Get left/right from obstacles
+                left_obs = perception_state.get_obstacle_by_direction('front_left')
+                right_obs = perception_state.get_obstacle_by_direction('front_right')
+                left = left_obs.distance if left_obs else 999
+                right = right_obs.distance if right_obs else 999
                 
-                # Calculate approach rate
-                current_time = time.time()
-                time_delta = 0
-                if self._last_measurement_time:
-                    time_delta = current_time - self._last_measurement_time
-                
-                approach_rate = hooks.calculate_approach_rate(
-                    front_clearance,
-                    self._last_front_dist,
-                    time_delta
-                )
-                
-                self._last_front_dist = front_clearance
-                self._last_measurement_time = current_time
-                
-                # PRIORITY 1: Emergency checks
-                if hooks.check_emergency_forward(self._current_direction, front_clearance):
+                # PRIORITY 1: Emergency checks (perception-aware)
+                if hooks.check_emergency_forward_perception(perception_state, self._current_direction):
                     print(f"\r🚨 EMERGENCY STOP! Front:{front_clearance:.0f}cm")
                     hooks.execute_stop(self.client)
                     self._emergency_stop_active = True
@@ -119,32 +117,35 @@ class AutonomousDriver:
                     time.sleep(0.1)
                     continue
                 
-                if hooks.check_emergency_reverse(self._current_direction, rear_clearance):
-                    print(f"\r🚨 EMERGENCY STOP REVERSE! Rear:{rear_clearance:.0f}cm")
+                if hooks.check_emergency_reverse(self._current_direction, rear):
+                    print(f"\r🚨 EMERGENCY STOP REVERSE! Rear:{rear:.0f}cm")
                     hooks.execute_stop(self.client)
                     self._emergency_stop_active = True
                     self._current_direction = "stopped"
                     time.sleep(0.1)
                     continue
                 
-                # Predictive braking
-                if hooks.check_pre_brake(self._current_direction, approach_rate):
-                    print(f"\r⚡ PRE-BRAKE! Approaching at {-approach_rate:.0f}cm/s")
+                # Predictive braking (perception-aware with velocity)
+                if hooks.check_pre_brake_perception(perception_state, self._current_direction):
+                    approaching_obs = perception_state.get_approaching_obstacles()
+                    if approaching_obs:
+                        vel = approaching_obs[0].velocity
+                        print(f"\r⚡ PRE-BRAKE! Obstacle approaching at {-vel:.0f}cm/s")
                     hooks.execute_pre_brake(self.client)
                     time.sleep(0.05)
                 
                 # Clear emergency flag if safe
-                if hooks.should_clear_emergency(front_clearance, rear_clearance):
+                if hooks.should_clear_emergency(front_clearance, rear):
                     self._emergency_stop_active = False
                 
                 # Update display (throttled)
                 self._display_update_counter += 1
                 if self._display_update_counter >= 4:
                     self._display_update_counter = 0
-                    self._update_display(left, right, rear, front_clearance)
+                    self._update_display_perception(perception_state)
                 
-                # Navigate
-                self._navigate(left, right, rear, front_clearance, rear_clearance, approach_rate)
+                # Navigate using perception state
+                self._navigate_perception(perception_state, left, right, rear)
                 
             except Exception as e:
                 print(f"\r⚠️  Error: {e}")
@@ -158,9 +159,10 @@ class AutonomousDriver:
             sleep_time = max(0, hooks.POLL_INTERVAL - loop_duration)
             time.sleep(sleep_time)
 
-    def _navigate(self, left: float, right: float, rear: float, 
-                  front_clearance: float, rear_clearance: float, approach_rate: float):
-        """Navigation decision logic using hooks."""
+    def _navigate_perception(self, state, left: float, right: float, rear: float):
+        """Navigation decision logic using perception state."""
+        front_clearance = state.front_clearance
+        rear_clearance = state.rear_clearance
         
         # TRAPPED check
         if hooks.check_trapped(front_clearance, rear_clearance):
@@ -182,19 +184,19 @@ class AutonomousDriver:
             elif front_clearance < hooks.EMERGENCY_STOP_DIST + margin and rear_clearance < hooks.EMERGENCY_STOP_DIST + margin:
                 return
         
-        # DECISION TREE (using hooks for decisions)
-        if hooks.should_cruise_forward(front_clearance):
+        # DECISION TREE (using perception-aware hooks)
+        if hooks.should_cruise_forward_perception(state):
             self._move_forward(left, right, hooks.CRUISE_SPEED, "CRUISE")
         
-        elif hooks.should_medium_forward(front_clearance):
+        elif hooks.should_medium_forward_perception(state):
             self._move_forward(left, right, hooks.MEDIUM_SPEED, "MEDIUM")
         
-        elif hooks.should_slow_forward(front_clearance):
+        elif hooks.should_slow_forward_perception(state):
             self._move_forward(left, right, hooks.SLOW_SPEED, "SLOW")
         
-        elif hooks.should_crawl_forward(front_clearance):
-            # Check if should reverse instead
-            if hooks.should_tactical_reverse(front_clearance, rear_clearance, approach_rate):
+        elif hooks.should_crawl_forward_perception(state):
+            # Check if should reverse instead (perception-aware)
+            if hooks.should_tactical_reverse_perception(state):
                 self._move_backward(left, right, rear_clearance, hooks.REVERSE_SLOW)
             else:
                 self._move_forward(left, right, hooks.CRAWL_SPEED, "CRAWL")
@@ -237,15 +239,21 @@ class AutonomousDriver:
         status = hooks.format_reverse_status(steer_label, rear, speed)
         print(f"\r{status}", end="")
 
-    def _update_display(self, left: float, right: float, rear: float, front_clearance: float):
-        """Update OLED display using hooks."""
+    def _update_display_perception(self, state):
+        """Update OLED display with perception data."""
+        # Extract obstacles for display
+        left_obs = state.get_obstacle_by_direction('front_left')
+        right_obs = state.get_obstacle_by_direction('front_right')
+        left = left_obs.distance if left_obs else 999
+        right = right_obs.distance if right_obs else 999
+        
         sensor_data = hooks.SensorData(
             left_distance=left,
             right_distance=right,
-            rear_distance=rear,
-            front_clearance=front_clearance,
+            rear_distance=state.rear_clearance,
+            front_clearance=state.front_clearance,
             approach_rate=0,
-            timestamp=time.time()
+            timestamp=state.timestamp
         )
         
         display_text = hooks.format_display_text(
@@ -253,6 +261,12 @@ class AutonomousDriver:
             self._current_direction,
             self._emergency_stop_active
         )
+        
+        # Add perception info
+        high_conf = len(state.get_high_confidence_obstacles(0.8))
+        if high_conf > 0:
+            display_text += f"\nConf:{high_conf}"
+        
         hooks.update_display(self.client, display_text)
 
 
@@ -270,15 +284,18 @@ def main():
         return
 
     print("\n" + "="*70)
-    print("PICAR AUTONOMOUS MODE - Refactored Version (Uses Hooks)")
+    print("PICAR AUTONOMOUS MODE - Perception-Powered")
     print("="*70)
     print("\nControls:")
     print("  G       — Start autonomous mode")
     print("  SPACE   — Stop autonomous mode")
     print("  Q       — Quit")
     print("="*70)
-    print("\nNote: This version uses autonomous_hooks.py for all logic.")
-    print("Fix bugs in hooks → both autonomous.py and autonomous_fsm.py benefit!")
+    print("\nFeatures:")
+    print("  ✓ Sensor fusion with confidence weighting")
+    print("  ✓ IMU-validated motion detection")
+    print("  ✓ Obstacle tracking with velocity")
+    print("  ✓ Predictive collision avoidance")
     print()
 
     fd = sys.stdin.fileno()

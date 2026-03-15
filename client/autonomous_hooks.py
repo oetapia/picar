@@ -4,11 +4,18 @@ Autonomous Navigation Hooks - Reusable Functions
 This module provides reusable hooks for autonomous navigation,
 extracted from the original autonomous.py implementation.
 These functions can be used by different navigation strategies.
+
+Now enhanced with Perception System integration for:
+- Sensor fusion with confidence weighting
+- IMU-validated motion detection
+- Obstacle tracking with velocity
+- Sensor health monitoring
 """
 
 from dataclasses import dataclass
 from typing import Tuple, Optional
 from picar_client import PicarClient
+from perception import PerceptionSystem, parse_imu_state, PerceptionState, Obstacle
 
 # ═══════════════════════════════════════════════════════════════════
 # CONSTANTS - Navigation Parameters
@@ -50,12 +57,27 @@ POLL_INTERVAL = 0.05
 
 
 # ═══════════════════════════════════════════════════════════════════
+# PERCEPTION SYSTEM SINGLETON
+# ═══════════════════════════════════════════════════════════════════
+
+_perception_system: Optional[PerceptionSystem] = None
+
+
+def get_perception_system() -> PerceptionSystem:
+    """Get or create singleton perception system."""
+    global _perception_system
+    if _perception_system is None:
+        _perception_system = PerceptionSystem()
+    return _perception_system
+
+
+# ═══════════════════════════════════════════════════════════════════
 # DATA STRUCTURES
 # ═══════════════════════════════════════════════════════════════════
 
 @dataclass
 class SensorData:
-    """Container for all sensor readings."""
+    """Container for all sensor readings (legacy - use PerceptionState for new code)."""
     left_distance: float
     right_distance: float
     rear_distance: float
@@ -79,7 +101,46 @@ class NavigationAction:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# SENSOR READING HOOKS
+# PERCEPTION-POWERED SENSOR READING HOOKS
+# ═══════════════════════════════════════════════════════════════════
+
+def read_perception_state(client: PicarClient) -> Optional[PerceptionState]:
+    """
+    Read all sensors and return fused perception state.
+    
+    Uses PerceptionSystem for:
+    - Sensor fusion with confidence weighting
+    - IMU integration for motion validation
+    - Obstacle tracking with velocity
+    - Sensor health monitoring
+    
+    Returns:
+        PerceptionState with fused sensor data, or None if critical sensors unavailable
+    """
+    # Read ToF sensors
+    left, right, tof_success = read_tof_sensors(client)
+    if not tof_success:
+        return None
+    
+    # Read ultrasonic
+    rear, _ = read_ultrasonic_sensor(client)
+    
+    # Read IMU with motor speed for motion validation
+    try:
+        status = client.status()
+        motor_speed = status.get('motor_speed', 0)
+        imu_state = client.get_accelerometer()
+        imu_data = parse_imu_state(imu_state, motor_speed)
+    except Exception:
+        imu_data = None
+    
+    # Fuse sensors using perception system
+    perception = get_perception_system()
+    return perception.fuse_sensors(left, right, rear, imu_data)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BASIC SENSOR READING HOOKS (Legacy - for compatibility)
 # ═══════════════════════════════════════════════════════════════════
 
 def read_tof_sensors(client: PicarClient) -> Tuple[Optional[float], Optional[float], bool]:
@@ -148,6 +209,136 @@ def calculate_approach_rate(current_dist: float,
     if last_dist is None or time_delta <= 0:
         return 0.0
     return (current_dist - last_dist) / time_delta
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PERCEPTION-AWARE DECISION HOOKS
+# ═══════════════════════════════════════════════════════════════════
+
+def should_cruise_forward_perception(state: PerceptionState) -> bool:
+    """Check if safe to cruise using perception state."""
+    # Use high-confidence obstacles only
+    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
+    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    
+    if not front_obstacles:
+        return state.front_clearance > VERY_SAFE_DIST
+    
+    # Check closest high-confidence obstacle
+    min_dist = min(o.distance for o in front_obstacles)
+    return min_dist > VERY_SAFE_DIST
+
+
+def should_medium_forward_perception(state: PerceptionState) -> bool:
+    """Check if safe for medium speed using perception state."""
+    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
+    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    
+    if not front_obstacles:
+        return state.front_clearance > SAFE_DIST
+    
+    min_dist = min(o.distance for o in front_obstacles)
+    return min_dist > SAFE_DIST
+
+
+def should_slow_forward_perception(state: PerceptionState) -> bool:
+    """Check if should slow down using perception state."""
+    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
+    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    
+    if not front_obstacles:
+        return state.front_clearance > CAUTION_DIST
+    
+    min_dist = min(o.distance for o in front_obstacles)
+    return min_dist > CAUTION_DIST
+
+
+def should_crawl_forward_perception(state: PerceptionState) -> bool:
+    """Check if should crawl forward using perception state."""
+    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
+    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    
+    if not front_obstacles:
+        return state.front_clearance > DANGER_DIST
+    
+    min_dist = min(o.distance for o in front_obstacles)
+    return min_dist > DANGER_DIST
+
+
+def should_tactical_reverse_perception(state: PerceptionState) -> bool:
+    """
+    Check if tactical reverse is needed using perception state.
+    
+    Enhanced with:
+    - Obstacle velocity (approaching obstacles)
+    - Motion validation (don't reverse if not moving)
+    - Confidence weighting
+    """
+    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
+    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    
+    if not front_obstacles:
+        # Use basic logic
+        return should_tactical_reverse(state.front_clearance, state.rear_clearance)
+    
+    # Get closest obstacle
+    closest = min(front_obstacles, key=lambda o: o.distance)
+    
+    # Check for approaching obstacles (negative velocity)
+    approaching = [o for o in front_obstacles if o.velocity and o.velocity < -15]
+    
+    # Fast approach with clear rear - pre-emptive reverse
+    if approaching and closest.distance < CAUTION_DIST and state.rear_clearance > REAR_CAUTION_DIST:
+        return True
+    
+    # CRITICAL front distance with clear rear - must reverse
+    if closest.distance < CRITICAL_DIST and state.rear_clearance > REAR_CAUTION_DIST:
+        return True
+    
+    return False
+
+
+def check_emergency_forward_perception(state: PerceptionState, 
+                                       current_direction: str,
+                                       threshold: float = EMERGENCY_STOP_DIST) -> bool:
+    """Check if forward emergency stop is needed using perception state."""
+    if current_direction != "forward":
+        return False
+    
+    # Use high-confidence obstacles only
+    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
+    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    
+    if not front_obstacles:
+        return state.front_clearance < threshold
+    
+    # Check closest high-confidence obstacle
+    min_dist = min(o.distance for o in front_obstacles)
+    return min_dist < threshold
+
+
+def check_pre_brake_perception(state: PerceptionState,
+                               current_direction: str) -> bool:
+    """
+    Check if predictive braking is needed using perception state.
+    
+    Uses obstacle velocity for more accurate prediction.
+    """
+    if current_direction != "forward":
+        return False
+    
+    # Get approaching obstacles
+    approaching = state.get_approaching_obstacles(threshold=-APPROACH_RATE_THRESHOLD)
+    
+    if not approaching:
+        return False
+    
+    # Check if any approaching obstacle is getting close
+    for obs in approaching:
+        if obs.direction.startswith('front') and obs.distance < SAFE_DIST:
+            return True
+    
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════

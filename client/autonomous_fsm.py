@@ -1,12 +1,16 @@
 """
-Autonomous Navigation using Hybrid Finite State Machine
+Autonomous Navigation using Hybrid Finite State Machine - Perception-Powered
 
-This module implements a cleaner, more maintainable autonomous navigation
-system using a Hybrid FSM + Decision Tree approach.
+Enhanced with perception system for:
+- Sensor fusion with confidence weighting
+- IMU-validated motion detection
+- Obstacle tracking with velocity
+- Predictive collision avoidance
 
 Architecture:
 - Finite State Machine for safety-critical states (emergency, recovery)
 - Priority-ordered Decision Tree for normal navigation
+- Perception system for advanced sensor fusion and obstacle tracking
 - Uses hooks from autonomous_hooks.py for all low-level operations
 """
 
@@ -93,8 +97,8 @@ class AutonomousFSM:
         self._thread = threading.Thread(target=self._navigation_loop, daemon=True)
         self._thread.start()
         
-        print("\r🚗 Autonomous FSM ON - Hybrid State Machine")
-        print("\r   Industry-standard navigation active")
+        print("\r🚗 Autonomous FSM ON - Perception-Powered")
+        print("\r   Sensor fusion + IMU + Obstacle tracking + State Machine active")
     
     def stop(self):
         """Stop autonomous navigation."""
@@ -120,64 +124,64 @@ class AutonomousFSM:
             loop_start = time.time()
             
             try:
-                # Read all sensors
-                sensor_data = self._read_sensors()
-                if sensor_data is None:
-                    print("\r⚠️  Sensors unavailable")
+                # Read all sensors via perception system
+                perception_state = self._read_sensors()
+                if perception_state is None:
+                    print("\r⚠️  Critical sensors unavailable")
                     hooks.execute_stop(self.client)
                     time.sleep(0.5)
                     continue
                 
-                # Update approach rate
-                sensor_data = self._update_approach_rate(sensor_data)
+                # Update tracking
+                perception_state = self._update_approach_rate(perception_state)
                 
-                # ═══ PRIORITY 1: EMERGENCY CHECKS ═══
-                emergency_state = self._check_emergency_conditions(sensor_data)
+                # ═══ PRIORITY 1: EMERGENCY CHECKS (PERCEPTION-AWARE) ═══
+                emergency_state = self._check_emergency_conditions_perception(perception_state)
                 if emergency_state:
                     self._transition_to(emergency_state)
-                    self._handle_state(sensor_data)
-                    self._update_display_throttled(sensor_data)
+                    self._handle_state_perception(perception_state)
+                    self._update_display_throttled_perception(perception_state)
                     self._maintain_poll_rate(loop_start)
                     continue
                 
                 # ═══ PRIORITY 2: RECOVERY LOGIC ═══
                 if self.state == NavigationState.EMERGENCY_STOP:
-                    recovery_state = self._handle_recovery(sensor_data)
+                    recovery_state = self._handle_recovery_perception(perception_state)
                     if recovery_state:
                         self._transition_to(recovery_state)
-                        self._handle_state(sensor_data)
-                        self._update_display_throttled(sensor_data)
+                        self._handle_state_perception(perception_state)
+                        self._update_display_throttled_perception(perception_state)
                         self._maintain_poll_rate(loop_start)
                         continue
                 
                 # Clear emergency flag if recovered
-                if hooks.should_clear_emergency(sensor_data.front_clearance, 
-                                               sensor_data.rear_distance):
+                if hooks.should_clear_emergency(perception_state.front_clearance, 
+                                               perception_state.rear_clearance):
                     if self.state == NavigationState.EMERGENCY_STOP:
                         self.state = NavigationState.STOPPED
                 
                 # ═══ PRIORITY 3: TRAPPED CHECK ═══
-                if hooks.check_trapped(sensor_data.front_clearance, 
-                                      sensor_data.rear_distance):
+                if hooks.check_trapped(perception_state.front_clearance, 
+                                      perception_state.rear_clearance):
                     self._transition_to(NavigationState.TRAPPED)
                     hooks.execute_stop(self.client)
                     self._current_direction = "stopped"
-                    print(f"\r🚨 TRAPPED! F:{sensor_data.front_clearance:.0f}cm "
-                          f"R:{sensor_data.rear_distance:.0f}cm")
-                    self._update_display_throttled(sensor_data)
+                    print(f"\r🚨 TRAPPED! F:{perception_state.front_clearance:.0f}cm "
+                          f"R:{perception_state.rear_clearance:.0f}cm")
+                    self._update_display_throttled_perception(perception_state)
                     self._maintain_poll_rate(loop_start)
                     continue
                 
-                # ═══ PRIORITY 4: NAVIGATION DECISION TREE ═══
-                new_state = self._decide_navigation_state(sensor_data)
+                # ═══ PRIORITY 4: NAVIGATION DECISION TREE (PERCEPTION-AWARE) ═══
+                new_state = self._decide_navigation_state_perception(perception_state)
                 if new_state != self.state:
                     self._transition_to(new_state)
                 
                 # Execute current state
-                self._handle_state(sensor_data)
+                self._handle_state_perception(perception_state)
                 
                 # Update display
-                self._update_display_throttled(sensor_data)
+                self._update_display_throttled_perception(perception_state)
                 
             except Exception as e:
                 print(f"\r⚠️  Navigation error: {e}")
@@ -192,83 +196,56 @@ class AutonomousFSM:
     # SENSOR READING
     # ═══════════════════════════════════════════════════════════════
     
-    def _read_sensors(self) -> Optional[hooks.SensorData]:
-        """Read all sensors and return SensorData object."""
-        # Read ToF sensors
-        left, right, tof_success = hooks.read_tof_sensors(self.client)
-        if not tof_success:
+    def _read_sensors(self):
+        """Read all sensors via perception system."""
+        # Use perception system for sensor fusion
+        perception_state = hooks.read_perception_state(self.client)
+        if perception_state is None:
             return None
         
-        # Read ultrasonic
-        rear, _ = hooks.read_ultrasonic_sensor(self.client)
-        
-        # Calculate clearances
-        front_clearance, _ = hooks.calculate_clearances(left, right, rear)
-        
-        return hooks.SensorData(
-            left_distance=left,
-            right_distance=right,
-            rear_distance=rear,
-            front_clearance=front_clearance,
-            approach_rate=0.0,  # Will be updated
-            timestamp=time.time()
-        )
+        # Return perception state directly (not SensorData)
+        return perception_state
     
-    def _update_approach_rate(self, sensor_data: hooks.SensorData) -> hooks.SensorData:
-        """Update approach rate in sensor data."""
-        time_delta = 0
-        if self._last_measurement_time:
-            time_delta = sensor_data.timestamp - self._last_measurement_time
+    def _update_approach_rate(self, perception_state):
+        """Update tracking for perception state (approach rate calculated by perception system)."""
+        # Perception system already tracks velocities per obstacle
+        # Just update our internal state tracking
+        self._last_front_dist = perception_state.front_clearance
+        self._last_measurement_time = perception_state.timestamp
         
-        approach_rate = hooks.calculate_approach_rate(
-            sensor_data.front_clearance,
-            self._last_front_dist,
-            time_delta
-        )
-        
-        self._last_front_dist = sensor_data.front_clearance
-        self._last_measurement_time = sensor_data.timestamp
-        
-        # Create new SensorData with updated approach rate
-        return hooks.SensorData(
-            left_distance=sensor_data.left_distance,
-            right_distance=sensor_data.right_distance,
-            rear_distance=sensor_data.rear_distance,
-            front_clearance=sensor_data.front_clearance,
-            approach_rate=approach_rate,
-            timestamp=sensor_data.timestamp
-        )
+        return perception_state
     
     # ═══════════════════════════════════════════════════════════════
-    # PRIORITY 1: EMERGENCY CHECKS
+    # PRIORITY 1: EMERGENCY CHECKS (PERCEPTION-AWARE)
     # ═══════════════════════════════════════════════════════════════
     
-    def _check_emergency_conditions(self, sensor_data: hooks.SensorData) -> Optional[NavigationState]:
+    def _check_emergency_conditions_perception(self, state) -> Optional[NavigationState]:
         """
-        Check for emergency conditions requiring immediate stop.
+        Check for emergency conditions using perception state.
         Returns new state if emergency detected, None otherwise.
         """
-        # Forward emergency
-        if hooks.check_emergency_forward(self._current_direction, 
-                                        sensor_data.front_clearance):
-            print(f"\r🚨 EMERGENCY STOP! Front:{sensor_data.front_clearance:.0f}cm")
+        # Forward emergency (perception-aware)
+        if hooks.check_emergency_forward_perception(state, self._current_direction):
+            print(f"\r🚨 EMERGENCY STOP! Front:{state.front_clearance:.0f}cm")
             hooks.execute_stop(self.client)
             self._current_direction = "stopped"
             time.sleep(0.1)
             return NavigationState.EMERGENCY_STOP
         
         # Reverse emergency
-        if hooks.check_emergency_reverse(self._current_direction,
-                                        sensor_data.rear_distance):
-            print(f"\r🚨 EMERGENCY STOP REVERSE! Rear:{sensor_data.rear_distance:.0f}cm")
+        if hooks.check_emergency_reverse(self._current_direction, state.rear_clearance):
+            print(f"\r🚨 EMERGENCY STOP REVERSE! Rear:{state.rear_clearance:.0f}cm")
             hooks.execute_stop(self.client)
             self._current_direction = "stopped"
             time.sleep(0.1)
             return NavigationState.EMERGENCY_STOP
         
-        # Predictive braking
-        if hooks.check_pre_brake(self._current_direction, sensor_data.approach_rate):
-            print(f"\r⚡ PRE-BRAKE! Approaching at {-sensor_data.approach_rate:.0f}cm/s")
+        # Predictive braking (perception-aware with velocity)
+        if hooks.check_pre_brake_perception(state, self._current_direction):
+            approaching_obs = state.get_approaching_obstacles()
+            if approaching_obs:
+                vel = approaching_obs[0].velocity
+                print(f"\r⚡ PRE-BRAKE! Obstacle approaching at {-vel:.0f}cm/s")
             hooks.execute_pre_brake(self.client)
             time.sleep(0.05)
         
@@ -278,57 +255,56 @@ class AutonomousFSM:
     # PRIORITY 2: RECOVERY LOGIC
     # ═══════════════════════════════════════════════════════════════
     
-    def _handle_recovery(self, sensor_data: hooks.SensorData) -> Optional[NavigationState]:
+    def _handle_recovery_perception(self, state) -> Optional[NavigationState]:
         """
-        Handle recovery from emergency stop.
+        Handle recovery from emergency stop using perception state.
         Returns recovery state or None if should stay stopped.
         """
         margin = 5  # Small margin to avoid getting stuck
         
         # Front still too close - must reverse
-        if (sensor_data.front_clearance < hooks.EMERGENCY_STOP_DIST + margin and
-            sensor_data.rear_distance > hooks.REAR_CAUTION_DIST):
+        if (state.front_clearance < hooks.EMERGENCY_STOP_DIST + margin and
+            state.rear_clearance > hooks.REAR_CAUTION_DIST):
             return NavigationState.RECOVERY
         
         # Rear still too close - must move forward
-        if (sensor_data.rear_distance < hooks.EMERGENCY_STOP_DIST + margin and
-            sensor_data.front_clearance > hooks.EMERGENCY_STOP_DIST + margin):
+        if (state.rear_clearance < hooks.EMERGENCY_STOP_DIST + margin and
+            state.front_clearance > hooks.EMERGENCY_STOP_DIST + margin):
             return NavigationState.RECOVERY
         
         # Both still too close - stay stopped
-        if (sensor_data.front_clearance < hooks.EMERGENCY_STOP_DIST + margin and
-            sensor_data.rear_distance < hooks.EMERGENCY_STOP_DIST + margin):
+        if (state.front_clearance < hooks.EMERGENCY_STOP_DIST + margin and
+            state.rear_clearance < hooks.EMERGENCY_STOP_DIST + margin):
             return None
         
         # Emergency cleared - resume normal navigation
         return None
     
     # ═══════════════════════════════════════════════════════════════
-    # PRIORITY 3: NAVIGATION DECISION TREE
+    # PRIORITY 3: NAVIGATION DECISION TREE (PERCEPTION-AWARE)
     # ═══════════════════════════════════════════════════════════════
     
-    def _decide_navigation_state(self, sensor_data: hooks.SensorData) -> NavigationState:
+    def _decide_navigation_state_perception(self, state) -> NavigationState:
         """
-        Decide navigation state based on sensor data using decision tree.
+        Decide navigation state using perception state.
         Priority-ordered from safest to most aggressive.
         """
-        fc = sensor_data.front_clearance
-        rc = sensor_data.rear_distance
-        ar = sensor_data.approach_rate
+        fc = state.front_clearance
+        rc = state.rear_clearance
         
-        # Decision tree (priority order)
-        if hooks.should_cruise_forward(fc):
+        # Decision tree (priority order) - using perception-aware hooks
+        if hooks.should_cruise_forward_perception(state):
             return NavigationState.CRUISE
         
-        elif hooks.should_medium_forward(fc):
+        elif hooks.should_medium_forward_perception(state):
             return NavigationState.MEDIUM
         
-        elif hooks.should_slow_forward(fc):
+        elif hooks.should_slow_forward_perception(state):
             return NavigationState.SLOW
         
-        elif hooks.should_crawl_forward(fc):
-            # Check if should reverse instead due to fast approach
-            if hooks.should_tactical_reverse(fc, rc, ar):
+        elif hooks.should_crawl_forward_perception(state):
+            # Check if should reverse instead (perception-aware)
+            if hooks.should_tactical_reverse_perception(state):
                 return NavigationState.TACTICAL_REVERSE
             return NavigationState.CRAWL
         
@@ -340,89 +316,63 @@ class AutonomousFSM:
             return NavigationState.STOPPED
     
     # ═══════════════════════════════════════════════════════════════
-    # STATE EXECUTION
+    # STATE EXECUTION (PERCEPTION-AWARE)
     # ═══════════════════════════════════════════════════════════════
     
-    def _handle_state(self, sensor_data: hooks.SensorData):
-        """Execute actions for current state."""
+    def _handle_state_perception(self, state):
+        """Execute actions for current state using perception state."""
+        # Extract left/right from obstacles
+        left_obs = state.get_obstacle_by_direction('front_left')
+        right_obs = state.get_obstacle_by_direction('front_right')
+        left = left_obs.distance if left_obs else 999
+        right = right_obs.distance if right_obs else 999
+        
         state_handlers = {
-            NavigationState.STOPPED: self._handle_stopped,
-            NavigationState.EMERGENCY_STOP: self._handle_emergency_stop,
-            NavigationState.RECOVERY: self._handle_recovery_state,
-            NavigationState.CRUISE: lambda sd: self._handle_forward(sd, hooks.CRUISE_SPEED, "CRUISE"),
-            NavigationState.MEDIUM: lambda sd: self._handle_forward(sd, hooks.MEDIUM_SPEED, "MEDIUM"),
-            NavigationState.SLOW: lambda sd: self._handle_forward(sd, hooks.SLOW_SPEED, "SLOW"),
-            NavigationState.CRAWL: lambda sd: self._handle_forward(sd, hooks.CRAWL_SPEED, "CRAWL"),
-            NavigationState.TACTICAL_REVERSE: self._handle_reverse,
-            NavigationState.TRAPPED: self._handle_trapped,
+            NavigationState.STOPPED: lambda: None,
+            NavigationState.EMERGENCY_STOP: lambda: None,
+            NavigationState.RECOVERY: lambda: self._handle_recovery_state_perception(state, left, right),
+            NavigationState.CRUISE: lambda: self._handle_forward_perception(state, left, right, hooks.CRUISE_SPEED, "CRUISE"),
+            NavigationState.MEDIUM: lambda: self._handle_forward_perception(state, left, right, hooks.MEDIUM_SPEED, "MEDIUM"),
+            NavigationState.SLOW: lambda: self._handle_forward_perception(state, left, right, hooks.SLOW_SPEED, "SLOW"),
+            NavigationState.CRAWL: lambda: self._handle_forward_perception(state, left, right, hooks.CRAWL_SPEED, "CRAWL"),
+            NavigationState.TACTICAL_REVERSE: lambda: self._handle_reverse_perception(state, left, right),
+            NavigationState.TRAPPED: lambda: None,
         }
         
         handler = state_handlers.get(self.state)
         if handler:
-            handler(sensor_data)
+            handler()
     
-    def _handle_stopped(self, sensor_data: hooks.SensorData):
-        """Handle stopped state."""
-        # Already stopped, nothing to do
-        pass
-    
-    def _handle_emergency_stop(self, sensor_data: hooks.SensorData):
-        """Handle emergency stop state."""
-        # Already stopped in emergency check
-        pass
-    
-    def _handle_recovery_state(self, sensor_data: hooks.SensorData):
-        """Handle recovery state."""
-        if sensor_data.front_clearance < sensor_data.rear_distance:
+    def _handle_recovery_state_perception(self, state, left: float, right: float):
+        """Handle recovery state using perception."""
+        if state.front_clearance < state.rear_clearance:
             # Front more blocked - reverse slowly
-            hooks.execute_reverse(self.client, hooks.REVERSE_SLOW,
-                                sensor_data.left_distance,
-                                sensor_data.right_distance,
-                                sensor_data.rear_distance)
+            hooks.execute_reverse(self.client, hooks.REVERSE_SLOW, left, right, state.rear_clearance)
             self._current_direction = "backward"
-            print(f"\r🔄 RECOVERY REVERSE Rear:{sensor_data.rear_distance:.0f}cm", end="")
+            print(f"\r🔄 RECOVERY REVERSE Rear:{state.rear_clearance:.0f}cm", end="")
         else:
             # Rear more blocked - crawl forward
-            hooks.execute_forward(self.client, hooks.CRAWL_SPEED,
-                                sensor_data.left_distance,
-                                sensor_data.right_distance)
+            hooks.execute_forward(self.client, hooks.CRAWL_SPEED, left, right)
             self._current_direction = "forward"
-            print(f"\r🔄 RECOVERY FORWARD Front:{sensor_data.front_clearance:.0f}cm", end="")
+            print(f"\r🔄 RECOVERY FORWARD Front:{state.front_clearance:.0f}cm", end="")
     
-    def _handle_forward(self, sensor_data: hooks.SensorData, speed: int, mode: str):
-        """Handle forward movement states."""
-        hooks.execute_forward(self.client, speed,
-                            sensor_data.left_distance,
-                            sensor_data.right_distance)
+    def _handle_forward_perception(self, state, left: float, right: float, speed: int, mode: str):
+        """Handle forward movement states using perception."""
+        hooks.execute_forward(self.client, speed, left, right)
         self._current_direction = "forward"
         
-        servo, steer_label = hooks.calculate_steering(sensor_data.left_distance,
-                                                      sensor_data.right_distance)
-        status = hooks.format_console_status(mode, steer_label,
-                                            sensor_data.left_distance,
-                                            sensor_data.right_distance,
-                                            speed)
+        servo, steer_label = hooks.calculate_steering(left, right)
+        status = hooks.format_console_status(mode, steer_label, left, right, speed)
         print(f"\r{status}", end="")
     
-    def _handle_reverse(self, sensor_data: hooks.SensorData):
-        """Handle tactical reverse state."""
-        hooks.execute_reverse(self.client, hooks.REVERSE_SLOW,
-                            sensor_data.left_distance,
-                            sensor_data.right_distance,
-                            sensor_data.rear_distance)
+    def _handle_reverse_perception(self, state, left: float, right: float):
+        """Handle tactical reverse state using perception."""
+        hooks.execute_reverse(self.client, hooks.REVERSE_SLOW, left, right, state.rear_clearance)
         self._current_direction = "backward"
         
-        servo, steer_label = hooks.calculate_reverse_steering(sensor_data.left_distance,
-                                                              sensor_data.right_distance)
-        status = hooks.format_reverse_status(steer_label,
-                                            sensor_data.rear_distance,
-                                            hooks.REVERSE_SLOW)
+        servo, steer_label = hooks.calculate_reverse_steering(left, right)
+        status = hooks.format_reverse_status(steer_label, state.rear_clearance, hooks.REVERSE_SLOW)
         print(f"\r{status}", end="")
-    
-    def _handle_trapped(self, sensor_data: hooks.SensorData):
-        """Handle trapped state."""
-        # Already stopped in trapped check
-        pass
     
     # ═══════════════════════════════════════════════════════════════
     # STATE TRANSITIONS
@@ -440,16 +390,37 @@ class AutonomousFSM:
     # DISPLAY AND TIMING
     # ═══════════════════════════════════════════════════════════════
     
-    def _update_display_throttled(self, sensor_data: hooks.SensorData):
-        """Update OLED display with throttling."""
+    def _update_display_throttled_perception(self, state):
+        """Update OLED display with perception data."""
         self._display_update_counter += 1
         if self._display_update_counter >= 4:  # Every 4 loops (~0.2s)
             self._display_update_counter = 0
+            
+            # Extract obstacles for display
+            left_obs = state.get_obstacle_by_direction('front_left')
+            right_obs = state.get_obstacle_by_direction('front_right')
+            left = left_obs.distance if left_obs else 999
+            right = right_obs.distance if right_obs else 999
+            
+            sensor_data = hooks.SensorData(
+                left_distance=left,
+                right_distance=right,
+                rear_distance=state.rear_clearance,
+                front_clearance=state.front_clearance,
+                approach_rate=0,
+                timestamp=state.timestamp
+            )
             
             emergency_active = self.state == NavigationState.EMERGENCY_STOP
             display_text = hooks.format_display_text(sensor_data,
                                                     self._current_direction,
                                                     emergency_active)
+            
+            # Add perception info
+            high_conf = len(state.get_high_confidence_obstacles(0.8))
+            if high_conf > 0:
+                display_text += f"\nConf:{high_conf}"
+            
             hooks.update_display(self.client, display_text)
     
     def _maintain_poll_rate(self, loop_start: float):
@@ -477,13 +448,19 @@ def main():
         return
     
     print("\n" + "="*70)
-    print("PICAR AUTONOMOUS FSM - Hybrid State Machine Navigation")
+    print("PICAR AUTONOMOUS FSM - Perception-Powered State Machine")
     print("="*70)
     print("\nControls:")
     print("  G       — Start FSM autonomous mode")
     print("  SPACE   — Stop (exit autonomous mode)")
     print("  Q       — Quit")
     print("="*70)
+    print("\nFeatures:")
+    print("  ✓ Hybrid FSM + Decision Tree architecture")
+    print("  ✓ Sensor fusion with confidence weighting")
+    print("  ✓ IMU-validated motion detection")
+    print("  ✓ Obstacle tracking with velocity")
+    print("  ✓ Predictive collision avoidance")
     print()
     
     fd = sys.stdin.fileno()

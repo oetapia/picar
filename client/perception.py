@@ -165,6 +165,7 @@ class PerceptionSystem:
         self.obstacles: List[Obstacle] = []
         self.last_imu_data: Optional[IMUData] = None
         self._previous_distances: Dict[str, Tuple[float, float]] = {}  # (distance, timestamp)
+        self._last_sensor_health: Dict[str, bool] = {}  # Store last sensor health state
     
     def fuse_sensors(self, 
                     tof_left: Optional[float],
@@ -230,13 +231,16 @@ class PerceptionSystem:
         front_clearance = self._calculate_front_clearance()
         rear_clearance = self._calculate_rear_clearance()
         
-        # Assess sensor health
+        # Assess sensor health (sensor is healthy if it returns data, even if 999 = no obstacles)
         sensor_health = {
-            'tof_left': tof_left is not None and tof_left < 999,
-            'tof_right': tof_right is not None and tof_right < 999,
-            'ultrasonic': ultrasonic_rear is not None and ultrasonic_rear < 999,
+            'tof_left': tof_left is not None,
+            'tof_right': tof_right is not None,
+            'ultrasonic': ultrasonic_rear is not None,
             'imu': imu_data is not None and imu_data.available if imu_data else False
         }
+        
+        # Store for health summary queries
+        self._last_sensor_health = sensor_health
         
         return PerceptionState(
             obstacles=self.obstacles.copy(),
@@ -376,7 +380,12 @@ class PerceptionSystem:
         return self.last_imu_data.accel_x < sudden_decel_threshold
     
     def get_sensor_health_summary(self) -> Dict[str, any]:
-        """Get summary of sensor health status."""
+        """
+        Get summary of sensor health status.
+        
+        Uses actual sensor data availability, not obstacle presence.
+        A sensor returning 999 (no obstacles) is still healthy.
+        """
         health = {
             'all_healthy': False,
             'critical_failure': False,
@@ -384,21 +393,16 @@ class PerceptionSystem:
             'details': {}
         }
         
-        if not self.last_imu_data:
+        # Use stored sensor health from last fusion
+        if not self._last_sensor_health:
             return health
         
-        # Check each sensor
-        tof_left_ok = any(o.sensor == 'tof_left' and o.time_since_update() < 1.0 for o in self.obstacles)
-        tof_right_ok = any(o.sensor == 'tof_right' and o.time_since_update() < 1.0 for o in self.obstacles)
-        ultrasonic_ok = any(o.sensor == 'ultrasonic' and o.time_since_update() < 1.0 for o in self.obstacles)
-        imu_ok = self.last_imu_data.available
+        health['details'] = self._last_sensor_health.copy()
         
-        health['details'] = {
-            'tof_left': tof_left_ok,
-            'tof_right': tof_right_ok,
-            'ultrasonic': ultrasonic_ok,
-            'imu': imu_ok
-        }
+        tof_left_ok = self._last_sensor_health.get('tof_left', False)
+        tof_right_ok = self._last_sensor_health.get('tof_right', False)
+        ultrasonic_ok = self._last_sensor_health.get('ultrasonic', False)
+        imu_ok = self._last_sensor_health.get('imu', False)
         
         # All healthy if at least one ToF and IMU working
         health['all_healthy'] = (tof_left_ok or tof_right_ok) and imu_ok

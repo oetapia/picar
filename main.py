@@ -12,8 +12,6 @@ import lights
 from sensors import accelerometer
 from sensors import dual_tof
 from sensors import hcsr04
-from sensors import proximity_guard
-from sensors import data_logger
 
 # ========== LED ==========
 led = machine.Pin("LED", machine.Pin.OUT)
@@ -100,39 +98,6 @@ def api_motor(request, speed):
     except Exception as e:
         response_data = {'success': False, 'message': f'Motor error: {e}'}
         print(f"Motor error: {e}")
-    finally:
-        led.off()
-    return create_cors_response(response_data)
-
-@app.route('/api/brake')
-def api_brake(request):
-    """Active brake — immediately stops the motor (DRV8871 only)."""
-    led.on()
-    try:
-        if hasattr(motor, 'brake'):
-            motor.brake()
-            motor.current_motor_speed = 0
-            _on_command(request, "BRAKE")
-            response_data = {
-                'success': True,
-                'motor_speed': 0,
-                'message': 'Active brake engaged'
-            }
-            print("Active brake engaged")
-        else:
-            # Fallback for drivers without brake (TB6612FNG)
-            motor.current_motor_speed = 0
-            motor.update_motor()
-            _on_command(request, "Motor: 0")
-            response_data = {
-                'success': True,
-                'motor_speed': 0,
-                'message': 'Coast stop (brake not supported by driver)'
-            }
-            print("Coast stop (no brake function)")
-    except Exception as e:
-        response_data = {'success': False, 'message': f'Brake error: {e}'}
-        print(f"Brake error: {e}")
     finally:
         led.off()
     return create_cors_response(response_data)
@@ -350,65 +315,6 @@ def api_lights_control(request, status):
     
     return create_cors_response(response_data)
 
-@app.route('/api/proximity_guard')
-def api_proximity_guard(request):
-    """Get proximity guard status (Pico-side emergency stop)."""
-    state = proximity_guard.get_state()
-    response_data = {
-        'success': True,
-        'enabled': state['enabled'],
-        'interventions': state['interventions'],
-        'last_front_cm': state['last_front_cm'],
-        'last_rear_cm': state['last_rear_cm'],
-        'message': f'Guard: {"ON" if state["enabled"] else "OFF"} | Stops: {state["interventions"]}'
-    }
-    return create_cors_response(response_data)
-
-# ========== Data Logger Endpoints ==========
-
-@app.route('/api/log/start', methods=['POST'])
-def api_log_start(request):
-    """Start recording sensor data for offline modeling."""
-    try:
-        body = json.loads(request.body.decode('utf-8')) if request.body else {}
-    except Exception:
-        body = {}
-    interval_ms = body.get('interval_ms')
-    max_samples = body.get('max_samples')
-    result = data_logger.start(interval_ms=interval_ms, max_samples=max_samples)
-    if result['success']:
-        _on_command(request, "Log: REC")
-    return create_cors_response(result)
-
-@app.route('/api/log/stop', methods=['POST'])
-def api_log_stop(request):
-    """Stop recording and flush to flash."""
-    result = data_logger.stop()
-    if result['success']:
-        _on_command(request, f"Log: {result.get('sample_count', 0)} saved")
-    return create_cors_response(result)
-
-@app.route('/api/log/status')
-def api_log_status(request):
-    """Get logger status (recording, sample count, file ready)."""
-    status = data_logger.get_status()
-    status['success'] = True
-    return create_cors_response(status)
-
-@app.route('/api/log/download')
-def api_log_download(request):
-    """Download the log profile JSON and auto-erase from Pico."""
-    result = data_logger.download_and_erase()
-    if result.get('success'):
-        _on_command(request, "Log: downloaded")
-    return create_cors_response(result)
-
-@app.route('/api/log/clear', methods=['DELETE'])
-def api_log_clear(request):
-    """Erase stored log without downloading."""
-    result = data_logger.clear()
-    return create_cors_response(result)
-
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}
@@ -427,8 +333,6 @@ async def start_server():
     asyncio.create_task(accelerometer.monitor())
     asyncio.create_task(dual_tof.monitor())
     asyncio.create_task(hcsr04.monitor())
-    asyncio.create_task(proximity_guard.monitor())
-    asyncio.create_task(data_logger.monitor())
     asyncio.create_task(_idle_watcher())
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)

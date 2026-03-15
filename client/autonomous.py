@@ -255,17 +255,19 @@ class AutonomousDriver:
         # If emergency stop was triggered, must clear to much safer distance before resuming
         if self._emergency_stop_active:
             # Check which direction triggered it and recover appropriately
-            if front_clearance < SAFE_DIST and rear_clearance > REAR_CAUTION_DIST:
-                # Front too close - must reverse
+            # Use EMERGENCY_STOP_DIST threshold for recovery (not SAFE_DIST) to avoid getting stuck
+            if front_clearance < EMERGENCY_STOP_DIST + 5 and rear_clearance > REAR_CAUTION_DIST:
+                # Front still too close - must reverse
                 self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
                 return
-            elif rear_clearance < REAR_SAFE_DIST and front_clearance > SAFE_DIST:
-                # Rear too close - must move forward
+            elif rear_clearance < EMERGENCY_STOP_DIST + 5 and front_clearance > EMERGENCY_STOP_DIST + 5:
+                # Rear still too close - must move forward
                 self._move_forward(left_dist, right_dist, CRAWL_SPEED, "RECOVER")
                 return
-            elif front_clearance < SAFE_DIST and rear_clearance < REAR_SAFE_DIST:
-                # Both still too close - stay stopped
+            elif front_clearance < EMERGENCY_STOP_DIST + 5 and rear_clearance < EMERGENCY_STOP_DIST + 5:
+                # Both still dangerously close - stay stopped
                 return
+            # If we reach here, emergency cleared and normal navigation resumes
         
         # DECISION: Choose best direction based on clearance
         # Note: Thresholds are now LARGER to account for lag

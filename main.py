@@ -8,9 +8,9 @@ import display
 import motor
 import servo
 import wifi
-from sensors import payload_sensor
 from sensors import accelerometer
 from sensors import dual_tof
+from sensors import hcsr04
 
 # ========== LED ==========
 led = machine.Pin("LED", machine.Pin.OUT)
@@ -160,23 +160,6 @@ def api_status(request):
     }
     return create_cors_response(response_data)
 
-@app.route('/api/sensors')
-def api_sensors(request):
-    state = payload_sensor.get_state()
-    response_data = {
-        'success': True,
-        'left_front':  state['left_front'],
-        'right_front': state['right_front'],
-        'left_back':   state['left_back'],
-        'right_back':  state['right_back'],
-        'timestamp':   state['timestamp'],
-        'message': 'LF:{} RF:{} LB:{} RB:{}'.format(
-            state['left_front'], state['right_front'],
-            state['left_back'],  state['right_back']
-        )
-    }
-    return create_cors_response(response_data)
-
 @app.route('/api/accelerometer')
 def api_accelerometer(request):
     state = accelerometer.get_state()
@@ -238,6 +221,32 @@ def api_tof(request):
         }
     return create_cors_response(response_data)
 
+@app.route('/api/ultrasonic')
+def api_ultrasonic(request):
+    state = hcsr04.get_state()
+    if state['available']:
+        distance = state['distance_cm']
+        in_range = state['in_range']
+        
+        response_data = {
+            'success': True,
+            'distance_cm': distance,
+            'in_range': in_range,
+            'timestamp': state['timestamp']
+        }
+        
+        if distance:
+            response_data['message'] = f'Rear: {distance:.1f}cm'
+        else:
+            response_data['message'] = 'Rear: No obstacle detected'
+    else:
+        response_data = {
+            'success': False,
+            'message': 'HC-SR04 ultrasonic sensor not available',
+            'available': False
+        }
+    return create_cors_response(response_data)
+
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}
@@ -252,9 +261,9 @@ async def start_server():
     else:
         print("WiFi not connected - server will run on localhost only")
         display.update_display(header="Server Ready", text="WiFi Failed")
-    asyncio.create_task(payload_sensor.monitor())
     asyncio.create_task(accelerometer.monitor())
     asyncio.create_task(dual_tof.monitor())
+    asyncio.create_task(hcsr04.monitor())
     asyncio.create_task(_idle_watcher())
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)

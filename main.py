@@ -9,6 +9,7 @@ import motor
 import servo
 import wifi
 from sensors import payload_sensor
+from sensors import accelerometer
 
 # ========== LED ==========
 led = machine.Pin("LED", machine.Pin.OUT)
@@ -175,6 +176,31 @@ def api_sensors(request):
     }
     return create_cors_response(response_data)
 
+@app.route('/api/accelerometer')
+def api_accelerometer(request):
+    state = accelerometer.get_state()
+    if state['available']:
+        response_data = {
+            'success': True,
+            'acceleration': state['acceleration'],
+            'gyroscope': state['gyroscope'],
+            'tilt': state['tilt'],
+            'orientation': state['orientation'],
+            'timestamp': state['timestamp'],
+            'message': 'P:{:+.0f}° R:{:+.0f}° {}'.format(
+                state['tilt']['pitch'],
+                state['tilt']['roll'],
+                state['orientation']
+            )
+        }
+    else:
+        response_data = {
+            'success': False,
+            'message': 'MPU-6050 sensor not available',
+            'available': False
+        }
+    return create_cors_response(response_data)
+
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}
@@ -190,6 +216,7 @@ async def start_server():
         print("WiFi not connected - server will run on localhost only")
         display.update_display(header="Server Ready", text="WiFi Failed")
     asyncio.create_task(payload_sensor.monitor())
+    asyncio.create_task(accelerometer.monitor())
     asyncio.create_task(_idle_watcher())
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)

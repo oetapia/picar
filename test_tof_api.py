@@ -5,9 +5,10 @@ Run this on your computer (not on the Pico) to test the API
 
 import requests
 import time
+import secrets
 
 # Configuration
-PICAR_IP = "192.168.1.100"  # Replace with your PiCar's IP address
+PICAR_IP = secrets.car_ip  # Replace with your PiCar's IP address
 PICAR_PORT = 5000
 BASE_URL = f"http://{PICAR_IP}:{PICAR_PORT}"
 

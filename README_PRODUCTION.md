@@ -28,7 +28,7 @@ picar/
 ├── icons.py                   # Icon loader for OLED display
 ├── icons.json                 # Icon definitions
 ├── vl53l0x_mp.py             # VL53L0X ToF sensor driver
-├── secrets-template.py        # WiFi credentials template (copy to secrets.py)
+├── config.example.py          # Configuration template (copy to config.py)
 ├── .gitignore                 # Git ignore patterns
 │
 ├── microdot/                  # Lightweight web framework
@@ -127,27 +127,29 @@ picar/
 2. Hold BOOTSEL button while connecting Pico to computer
 3. Drag and drop the `.uf2` file to the RPI-RP2 drive
 
-### 2. Create secrets.py
+### 2. Create config.py
 
 Copy the template file and add your WiFi credentials:
 
 ```bash
 # Copy the template
-cp secrets-template.py secrets.py
+cp config.example.py config.py
 
-# Edit secrets.py with your credentials
+# Edit config.py with your credentials
 # Replace YOUR_WIFI_SSID with your network name
 # Replace YOUR_WIFI_PASSWORD with your WiFi password
 ```
 
-Or create `secrets.py` manually in the root directory:
+Or create `config.py` manually in the root directory:
 
 ```python
 ssid = "YOUR_WIFI_SSID"
 password = "YOUR_WIFI_PASSWORD"
 ```
 
-**Important**: `secrets.py` is in `.gitignore` and will not be committed to git. The `secrets-template.py` file is a safe template you can commit.
+**Important**: `config.py` is in `.gitignore` and will not be committed to git. The `config.example.py` file is a safe template you can commit.
+
+**Note**: This was renamed from `secrets.py` to `config.py` to avoid naming conflicts with Python's built-in `secrets` module.
 
 ### 3. Upload Files to Pico
 
@@ -271,7 +273,7 @@ This branch (`production-pico`) contains **only** the files needed to run on the
 ## 🛠️ Troubleshooting
 
 ### WiFi Connection Issues
-- Check `secrets.py` credentials
+- Check `config.py` credentials
 - Ensure 2.4GHz WiFi (Pico W doesn't support 5GHz)
 - Check WiFi signal strength
 

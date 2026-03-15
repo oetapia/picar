@@ -1,16 +1,16 @@
 import time
 import network
-import secrets
+import config
 
 
 def connect_wifi():
-    """Connect to WiFi using secrets.py"""
+    """Connect to WiFi using config.py"""
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
 
     if not wlan.isconnected():
-        print(f'Connecting to WiFi: {secrets.ssid}')
-        wlan.connect(secrets.ssid, secrets.password)
+        print(f'Connecting to WiFi: {config.ssid}')
+        wlan.connect(config.ssid, config.password)
 
         timeout = 10
         while timeout > 0:

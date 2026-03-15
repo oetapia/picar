@@ -265,8 +265,9 @@ if __name__ == "__main__":
             await asyncio.sleep_ms(500)
             s = get_state()
             if s["available"]:
-                print(f"[{i+1:02d}] Accel: X={s['acceleration']['x']:+.3f}g Y={s['acceleration']['y']:+.3f}g Z={s['acceleration']['z']:+.3f}g | "
-                      f"Tilt: P={s['tilt']['pitch']:+.1f}° R={s['tilt']['roll']:+.1f}° | {s['orientation']}")
+                message1 = f"[{i+1:02d}] Accel: X={s['acceleration']['x']:+.3f}g Y={s['acceleration']['y']:+.3f}g Z={s['acceleration']['z']:+.3f}g | "
+                message2 = f"Tilt: P={s['tilt']['pitch']:+.1f}deg R={s['tilt']['roll']:+.1f}deg | {s['orientation']}"
+                print(message1, message2)
             else:
                 print(f"[{i+1:02d}] Sensor not available")
         

@@ -10,6 +10,7 @@ import servo
 import wifi
 from sensors import payload_sensor
 from sensors import accelerometer
+from sensors import dual_tof
 
 # ========== LED ==========
 led = machine.Pin("LED", machine.Pin.OUT)
@@ -201,6 +202,42 @@ def api_accelerometer(request):
         }
     return create_cors_response(response_data)
 
+@app.route('/api/tof')
+def api_tof(request):
+    state = dual_tof.get_state()
+    if state['available']:
+        # Build response with distance data
+        response_data = {
+            'success': True,
+            'left_distance_cm': state['left_distance_cm'],
+            'right_distance_cm': state['right_distance_cm'],
+            'left_available': state['left_available'],
+            'right_available': state['right_available'],
+            'timestamp': state['timestamp']
+        }
+        
+        # Add angle data if available (requires both sensors)
+        if state['angle']:
+            response_data['angle'] = state['angle']
+            angle_data = state['angle']
+            response_data['message'] = 'L:{:.1f}cm R:{:.1f}cm | {:+.2f}° {}'.format(
+                state['left_distance_cm'] if state['left_distance_cm'] else 0,
+                state['right_distance_cm'] if state['right_distance_cm'] else 0,
+                angle_data['angle_degrees'],
+                angle_data['orientation']
+            )
+        else:
+            left_str = f"{state['left_distance_cm']:.1f}cm" if state['left_distance_cm'] else "---"
+            right_str = f"{state['right_distance_cm']:.1f}cm" if state['right_distance_cm'] else "---"
+            response_data['message'] = f'L:{left_str} R:{right_str}'
+    else:
+        response_data = {
+            'success': False,
+            'message': 'VL53L0X ToF sensors not available',
+            'available': False
+        }
+    return create_cors_response(response_data)
+
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}
@@ -217,6 +254,7 @@ async def start_server():
         display.update_display(header="Server Ready", text="WiFi Failed")
     asyncio.create_task(payload_sensor.monitor())
     asyncio.create_task(accelerometer.monitor())
+    asyncio.create_task(dual_tof.monitor())
     asyncio.create_task(_idle_watcher())
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)

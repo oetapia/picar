@@ -11,7 +11,10 @@ Displays:
 
 import time
 import display
-from tof_angle_calculator import ToFAngleCalculator
+try:
+    from .tof_angle_calculator import ToFAngleCalculator
+except ImportError:
+    from tof_angle_calculator import ToFAngleCalculator
 
 
 def format_angle_for_display(angle_data):

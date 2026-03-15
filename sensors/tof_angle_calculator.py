@@ -30,7 +30,10 @@ If L_dist ≈ R_dist: Wall is perpendicular (straight ahead)
 """
 
 import math
-from dual_tof_sensor import DualToFSensor
+try:
+    from .dual_tof_sensor import DualToFSensor
+except ImportError:
+    from dual_tof_sensor import DualToFSensor
 
 
 class ToFAngleCalculator:

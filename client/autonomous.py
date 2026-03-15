@@ -8,18 +8,18 @@ from picar_client import PicarClient
 
 # ── driving parameters (physics-based) ───────────────────────────────
 # Speed settings - progressive control based on clearance
-CRUISE_SPEED       =  45   # full speed when clear (>80cm) - ~50 cm/s
+CRUISE_SPEED       =  35   # full speed when clear (>80cm) - ~50 cm/s
 MEDIUM_SPEED       =  30   # moderate speed for caution zone (50-80cm)
 SLOW_SPEED         =  20   # slow speed for warning zone (30-50cm)
 CRAWL_SPEED        =  15   # very slow for tight navigation (<30cm)
-REVERSE_FAST       = -40   # fast reverse when rear clear (>50cm)
+REVERSE_FAST       = -30   # fast reverse when rear clear (>50cm)
 REVERSE_SLOW       = -25   # slow reverse in caution zone (30-50cm)
 
 # Steering angles
-STEER_LEFT         =  50   # hard left
-STEER_SLIGHT_LEFT  =  75   # gentle left nudge
-STEER_RIGHT        = 130   # hard right
-STEER_SLIGHT_RIGHT = 105   # gentle right nudge
+STEER_LEFT         =  0   # hard left
+STEER_SLIGHT_LEFT  =  35   # gentle left nudge
+STEER_RIGHT        = 180   # hard right
+STEER_SLIGHT_RIGHT = 145   # gentle right nudge
 CENTRE             =  90
 
 # Timing - faster response for better reaction
@@ -28,8 +28,8 @@ MIN_MANEUVER_TIME  =  0.3  # minimum time to hold a direction change
 
 # ── distance thresholds (cm) - physics-based stopping distances ──────
 # Front distance zones (accounting for 250-350ms reaction time)
-VERY_SAFE_DIST     = 80    # full cruise speed safe
-SAFE_DIST          = 50    # medium speed zone
+VERY_SAFE_DIST     = 70    # full cruise speed safe
+SAFE_DIST          = 40    # medium speed zone
 CAUTION_DIST       = 30    # slow speed zone
 DANGER_DIST        = 25    # prepare to change direction
 CRITICAL_DIST      = 20    # must change direction immediately

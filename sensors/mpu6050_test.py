@@ -82,7 +82,7 @@ class MPU6050:
             
             # Wake up the sensor (default is sleep mode)
             self._write_byte(PWR_MGMT_1, 0x00)
-            time.sleep_ms(100)
+            time.sleep(0.1)
             
             # Set accelerometer range to +/-2g (default)
             # Set gyroscope range to +/-250 deg/s (default)
@@ -202,7 +202,7 @@ def main():
     # Initialize I2C
     print(f"\n[1] Initializing I2C on GP{SDA_PIN} (SDA) and GP{SCL_PIN} (SCL)...")
     i2c = machine.I2C(I2C_BUS, sda=machine.Pin(SDA_PIN), scl=machine.Pin(SCL_PIN), freq=I2C_FREQ)
-    time.sleep_ms(10)
+    time.sleep(0.01)
     
     # Scan for devices
     devices = i2c.scan()
@@ -267,7 +267,7 @@ def main():
                 print(f"[{measurement_count:04d}] Read error")
             
             # Wait before next measurement (5 measurements per second)
-            time.sleep_ms(200)
+            time.sleep(0.2)
             
     except KeyboardInterrupt:
         print("\n" + "-" * 40)

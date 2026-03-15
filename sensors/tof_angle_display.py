@@ -136,7 +136,7 @@ def run_angle_display(sensor_spacing_cm=15.0, update_rate_hz=5):
                 print(f"[{count:04d}] No valid reading")
             
             # Wait before next update
-            time.sleep_ms(update_delay_ms)
+            time.sleep(update_delay_ms / 1000)
             
     except KeyboardInterrupt:
         print("\n" + "-" * 60)

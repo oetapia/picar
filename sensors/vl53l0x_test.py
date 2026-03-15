@@ -12,8 +12,8 @@ from vl53l0x_mp import VL53L0X, VL53L0XError
 
 # ========== VL53L0X Configuration ==========
 VL53L0X_I2C_ADDR = 0x29  # Default I2C address
-SDA_PIN = 20              # GP0 - VL53L0X SDA
-SCL_PIN = 21              # GP1 - VL53L0X SCL
+SDA_PIN = 6              # GP0 - VL53L0X SDA
+SCL_PIN = 7              # GP1 - VL53L0X SCL
 I2C_FREQ = 100_000       # 100kHz - more reliable for VL53L0X on Pico
 
 # Note: VL53L0X uses separate I2C pins from OLED

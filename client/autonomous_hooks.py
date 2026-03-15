@@ -217,9 +217,9 @@ def calculate_approach_rate(current_dist: float,
 
 def should_cruise_forward_perception(state: PerceptionState) -> bool:
     """Check if safe to cruise using perception state."""
-    # Use high-confidence obstacles only
-    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
-    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    # Filter high-confidence obstacles from state
+    high_conf_obstacles = [o for o in state.obstacles if o.confidence >= 0.7]
+    front_obstacles = [o for o in high_conf_obstacles if o.direction.startswith('front')]
     
     if not front_obstacles:
         return state.front_clearance > VERY_SAFE_DIST
@@ -231,8 +231,8 @@ def should_cruise_forward_perception(state: PerceptionState) -> bool:
 
 def should_medium_forward_perception(state: PerceptionState) -> bool:
     """Check if safe for medium speed using perception state."""
-    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
-    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    high_conf_obstacles = [o for o in state.obstacles if o.confidence >= 0.7]
+    front_obstacles = [o for o in high_conf_obstacles if o.direction.startswith('front')]
     
     if not front_obstacles:
         return state.front_clearance > SAFE_DIST
@@ -243,8 +243,8 @@ def should_medium_forward_perception(state: PerceptionState) -> bool:
 
 def should_slow_forward_perception(state: PerceptionState) -> bool:
     """Check if should slow down using perception state."""
-    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
-    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    high_conf_obstacles = [o for o in state.obstacles if o.confidence >= 0.7]
+    front_obstacles = [o for o in high_conf_obstacles if o.direction.startswith('front')]
     
     if not front_obstacles:
         return state.front_clearance > CAUTION_DIST
@@ -255,8 +255,8 @@ def should_slow_forward_perception(state: PerceptionState) -> bool:
 
 def should_crawl_forward_perception(state: PerceptionState) -> bool:
     """Check if should crawl forward using perception state."""
-    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
-    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    high_conf_obstacles = [o for o in state.obstacles if o.confidence >= 0.7]
+    front_obstacles = [o for o in high_conf_obstacles if o.direction.startswith('front')]
     
     if not front_obstacles:
         return state.front_clearance > DANGER_DIST
@@ -274,8 +274,8 @@ def should_tactical_reverse_perception(state: PerceptionState) -> bool:
     - Motion validation (don't reverse if not moving)
     - Confidence weighting
     """
-    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
-    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    high_conf_obstacles = [o for o in state.obstacles if o.confidence >= 0.7]
+    front_obstacles = [o for o in high_conf_obstacles if o.direction.startswith('front')]
     
     if not front_obstacles:
         # Use basic logic
@@ -305,9 +305,9 @@ def check_emergency_forward_perception(state: PerceptionState,
     if current_direction != "forward":
         return False
     
-    # Use high-confidence obstacles only
-    obstacles = state.get_high_confidence_obstacles(min_confidence=0.7)
-    front_obstacles = [o for o in obstacles if o.direction.startswith('front')]
+    # Filter high-confidence obstacles
+    high_conf_obstacles = [o for o in state.obstacles if o.confidence >= 0.7]
+    front_obstacles = [o for o in high_conf_obstacles if o.direction.startswith('front')]
     
     if not front_obstacles:
         return state.front_clearance < threshold
@@ -327,8 +327,8 @@ def check_pre_brake_perception(state: PerceptionState,
     if current_direction != "forward":
         return False
     
-    # Get approaching obstacles
-    approaching = state.get_approaching_obstacles(threshold=-APPROACH_RATE_THRESHOLD)
+    # Get approaching obstacles (negative velocity)
+    approaching = [o for o in state.obstacles if o.velocity and o.velocity < -APPROACH_RATE_THRESHOLD]
     
     if not approaching:
         return False

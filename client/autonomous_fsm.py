@@ -242,7 +242,7 @@ class AutonomousFSM:
         
         # Predictive braking (perception-aware with velocity)
         if hooks.check_pre_brake_perception(state, self._current_direction):
-            approaching_obs = state.get_approaching_obstacles()
+            approaching_obs = [o for o in state.obstacles if o.velocity and o.velocity < -hooks.APPROACH_RATE_THRESHOLD]
             if approaching_obs:
                 vel = approaching_obs[0].velocity
                 print(f"\r⚡ PRE-BRAKE! Obstacle approaching at {-vel:.0f}cm/s")
@@ -417,7 +417,7 @@ class AutonomousFSM:
                                                     emergency_active)
             
             # Add perception info
-            high_conf = len(state.get_high_confidence_obstacles(0.8))
+            high_conf = len([o for o in state.obstacles if o.confidence >= 0.8])
             if high_conf > 0:
                 display_text += f"\nConf:{high_conf}"
             

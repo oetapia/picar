@@ -96,17 +96,13 @@ class AutonomousDriver:
                     time.sleep(0.5)
                     continue
                 
-                # Extract basic values for compatibility
-                left = perception_state.obstacles[0].distance if len([o for o in perception_state.obstacles if o.direction == 'front_left']) > 0 else 999
-                right = perception_state.obstacles[0].distance if len([o for o in perception_state.obstacles if o.direction == 'front_right']) > 0 else 999
-                rear = perception_state.rear_clearance
-                front_clearance = perception_state.front_clearance
-                
-                # Get left/right from obstacles
+                # Extract left/right distances from perception obstacles
                 left_obs = perception_state.get_obstacle_by_direction('front_left')
                 right_obs = perception_state.get_obstacle_by_direction('front_right')
                 left = left_obs.distance if left_obs else 999
                 right = right_obs.distance if right_obs else 999
+                rear = perception_state.rear_clearance
+                front_clearance = perception_state.front_clearance
                 
                 # PRIORITY 1: Emergency checks (perception-aware)
                 if hooks.check_emergency_forward_perception(perception_state, self._current_direction):
@@ -127,7 +123,7 @@ class AutonomousDriver:
                 
                 # Predictive braking (perception-aware with velocity)
                 if hooks.check_pre_brake_perception(perception_state, self._current_direction):
-                    approaching_obs = perception_state.get_approaching_obstacles()
+                    approaching_obs = [o for o in perception_state.obstacles if o.velocity and o.velocity < -hooks.APPROACH_RATE_THRESHOLD]
                     if approaching_obs:
                         vel = approaching_obs[0].velocity
                         print(f"\r⚡ PRE-BRAKE! Obstacle approaching at {-vel:.0f}cm/s")
@@ -263,7 +259,7 @@ class AutonomousDriver:
         )
         
         # Add perception info
-        high_conf = len(state.get_high_confidence_obstacles(0.8))
+        high_conf = len([o for o in state.obstacles if o.confidence >= 0.8])
         if high_conf > 0:
             display_text += f"\nConf:{high_conf}"
         

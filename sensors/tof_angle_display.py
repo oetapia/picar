@@ -9,15 +9,12 @@ Displays:
 - Navigation arrows
 """
 
-import sys
-sys.path.insert(0, '/sensors')  # For mpremote run from root
-
 import time
-import display
 try:
-    from .tof_angle_calculator import ToFAngleCalculator
+    import display
 except ImportError:
-    from tof_angle_calculator import ToFAngleCalculator
+    display = None
+from sensors.tof_angle_calculator import ToFAngleCalculator
 
 
 def format_angle_for_display(angle_data):
@@ -80,12 +77,13 @@ def run_angle_display(sensor_spacing_cm=15.0, update_rate_hz=5):
     print("-" * 60)
     
     # Check display
-    if display.display is None:
-        print("ERROR: OLED display not initialized!")
-        return
+    use_display = display is not None and hasattr(display, 'display') and display.display is not None
+    if not use_display:
+        print("WARNING: OLED display not available - console output only")
     
     # Initialize angle calculator
-    display.update_display(header="ToF Init", text="Starting...")
+    if use_display:
+        display.update_display(header="ToF Init", text="Starting...")
     calc = ToFAngleCalculator(sensor_spacing_cm=sensor_spacing_cm)
     
     print("Initializing ToF sensors...")
@@ -93,16 +91,18 @@ def run_angle_display(sensor_spacing_cm=15.0, update_rate_hz=5):
     
     if not (left_ok and right_ok):
         print("\nWARNING: Not all sensors initialized!")
-        display.update_display(
-            header="ToF Error",
-            text="Check wiring"
-        )
-        time.sleep(2)
+        if use_display:
+            display.update_display(
+                header="ToF Error",
+                text="Check wiring"
+            )
+            time.sleep(2)
         if not left_ok and not right_ok:
             return
     
-    display.update_display(header="ToF Ready", text="Starting...")
-    time.sleep(1)
+    if use_display:
+        display.update_display(header="ToF Ready", text="Starting...")
+        time.sleep(1)
     
     print("\nDisplaying angles on OLED...")
     
@@ -120,11 +120,12 @@ def run_angle_display(sensor_spacing_cm=15.0, update_rate_hz=5):
             # Format for display
             line1, line2 = format_angle_for_display(angle_data)
             
-            # Update OLED
-            display.update_display(
-                header="Wall Angle",
-                text=f"{line1}\n{line2}"
-            )
+            # Update OLED (if available)
+            if use_display:
+                display.update_display(
+                    header="Wall Angle",
+                    text=f"{line1}\n{line2}"
+                )
             
             # Print to console
             if angle_data:
@@ -140,11 +141,13 @@ def run_angle_display(sensor_spacing_cm=15.0, update_rate_hz=5):
     except KeyboardInterrupt:
         print("\n" + "-" * 60)
         print("Stopped by user")
-        display.update_display(header="ToF Angle", text="Stopped")
-        time.sleep(1)
+        if use_display:
+            display.update_display(header="ToF Angle", text="Stopped")
+            time.sleep(1)
     except Exception as e:
         print(f"\nError: {e}")
-        display.update_display(header="Error", text=str(e)[:20])
+        if use_display:
+            display.update_display(header="Error", text=str(e)[:20])
         import sys
         sys.print_exception(e)
         time.sleep(2)
@@ -154,8 +157,9 @@ def test_display_formats():
     """Test different angle display formats without sensors."""
     print("Testing display formats...")
     
-    if display.display is None:
-        print("ERROR: OLED display not initialized!")
+    use_display = display is not None and hasattr(display, 'display') and display.display is not None
+    if not use_display:
+        print("ERROR: OLED display not available!")
         return
     
     test_cases = [
@@ -201,8 +205,9 @@ def test_display_formats():
 
 def show_angle_legend():
     """Show a quick legend on the display."""
-    if display.display is None:
-        print("ERROR: OLED display not initialized!")
+    use_display = display is not None and hasattr(display, 'display') and display.display is not None
+    if not use_display:
+        print("ERROR: OLED display not available!")
         return
     
     legends = [

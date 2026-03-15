@@ -6,14 +6,14 @@ import time
 
 from picar_client import PicarClient
 
-# ── driving parameters (physics-based) ───────────────────────────────
-# Speed settings - progressive control based on clearance
-CRUISE_SPEED       =  45   # full speed when clear (>80cm) - ~50 cm/s
-MEDIUM_SPEED       =  30   # moderate speed for caution zone (50-80cm)
-SLOW_SPEED         =  20   # slow speed for warning zone (30-50cm)
-CRAWL_SPEED        =  15   # very slow for tight navigation (<30cm)
-REVERSE_FAST       = -40   # fast reverse when rear clear (>50cm)
-REVERSE_SLOW       = -25   # slow reverse in caution zone (30-50cm)
+# ── driving parameters (ANTI-LAG TUNED) ──────────────────────────────
+# CRITICAL: Reduced speeds to account for network/motor lag
+CRUISE_SPEED       =  35   # conservative cruise (was 45) - ~40 cm/s
+MEDIUM_SPEED       =  25   # moderate speed (was 30)
+SLOW_SPEED         =  18   # slow speed (was 20)
+CRAWL_SPEED        =  12   # very slow (was 15)
+REVERSE_FAST       = -35   # fast reverse (was -40)
+REVERSE_SLOW       = -22   # slow reverse (was -25)
 
 # Steering angles
 STEER_LEFT         =  50   # hard left
@@ -22,25 +22,26 @@ STEER_RIGHT        = 130   # hard right
 STEER_SLIGHT_RIGHT = 105   # gentle right nudge
 CENTRE             =  90
 
-# Timing - faster response for better reaction
-POLL_INTERVAL      =  0.08 # seconds between sensor polls (~4cm at cruise)
-MIN_MANEUVER_TIME  =  0.3  # minimum time to hold a direction change
+# Timing - AGGRESSIVE POLLING to minimize lag
+POLL_INTERVAL      =  0.05 # FASTER: check every 2cm at cruise (was 0.08)
 
-# ── distance thresholds (cm) - physics-based stopping distances ──────
-# Front distance zones (accounting for 250-350ms reaction time)
-VERY_SAFE_DIST     = 80    # full cruise speed safe
-SAFE_DIST          = 50    # medium speed zone
-CAUTION_DIST       = 30    # slow speed zone
-DANGER_DIST        = 25    # prepare to change direction
-CRITICAL_DIST      = 20    # must change direction immediately
+# ── distance thresholds (cm) - ANTI-LAG: LARGER MARGINS ──────────────
+# CRITICAL: Increased thresholds to account for 250-400ms total lag
+# At 40cm/s cruise: car travels 16cm during reaction delay!
+EMERGENCY_STOP_DIST = 50   # 🚨 IMMEDIATE STOP - no questions asked
+VERY_SAFE_DIST      = 90   # full cruise speed safe (was 80)
+SAFE_DIST           = 60   # medium speed zone (was 50)
+CAUTION_DIST        = 45   # slow speed zone (was 30) 
+DANGER_DIST         = 35   # crawl speed (was 25)
+CRITICAL_DIST       = 25   # must reverse NOW (was 20)
 
-# Rear distance zones
-REAR_SAFE_DIST     = 50    # safe to reverse at speed
-REAR_CAUTION_DIST  = 30    # slow reverse only
-REAR_DANGER_DIST   = 20    # cannot reverse safely
+# Rear distance zones - also increased
+REAR_SAFE_DIST      = 55   # safe to reverse at speed (was 50)
+REAR_CAUTION_DIST   = 35   # slow reverse only (was 30)
+REAR_DANGER_DIST    = 25   # cannot reverse safely (was 20)
 
-# Clearance scoring weights
-MIN_SAFE_SCORE     = 40    # minimum clearance to move in any direction
+# Velocity tracking for predictive collision detection
+APPROACH_RATE_THRESHOLD = 15  # cm/s - if closing faster than this, pre-brake
 
 
 class AutonomousDriver:
@@ -61,17 +62,21 @@ class AutonomousDriver:
     4. No blocking operations - continuous sensor monitoring
     5. Instant direction changes when needed
     
-    Distance Zones (based on reaction time physics):
+    ANTI-LAG Distance Zones (accounting for full lag chain):
     ────────────────────────────────────────────────────
-    > 80cm: VERY SAFE    → cruise speed (45%)
-    50-80cm: SAFE        → medium speed (30%)
-    30-50cm: CAUTION     → slow speed (20%)
-    25-30cm: DANGER      → crawl/evaluate direction
-    < 25cm: CRITICAL     → change direction immediately
+    < 50cm: EMERGENCY    → immediate stop (pre-emptive)
+    > 90cm: VERY SAFE    → cruise speed (35%)
+    60-90cm: SAFE        → medium speed (25%)
+    45-60cm: CAUTION     → slow speed (18%)
+    35-45cm: DANGER      → crawl speed (12%)
+    < 35cm: CRITICAL     → must reverse
     
-    Reaction time: ~250-350ms (sensor + network + motor)
-    At cruise speed: car travels ~17cm during reaction
-    Therefore: detect at 25cm to stop at ~8cm minimum
+    Lag Analysis (Total: 250-400ms):
+    - Sensor read: 20-50ms
+    - Network HTTP: 50-150ms (WiFi/processing)
+    - Motor response: 100-150ms (physical inertia)
+    - At 40cm/s: travels 10-16cm during lag
+    - Emergency threshold at 50cm provides 25-30cm safety margin
     """
 
     def __init__(self, client: PicarClient):
@@ -80,6 +85,9 @@ class AutonomousDriver:
         self._thread = None
         self._last_action_time = 0
         self._current_direction = "stopped"  # "forward", "backward", "stopped"
+        self._last_front_dist = None
+        self._last_measurement_time = None
+        self._emergency_stop_active = False
 
     # ── public controls ──────────────────────────────────────────────
 
@@ -105,6 +113,8 @@ class AutonomousDriver:
 
     def _loop(self):
         while self.autonomous:
+            loop_start = time.time()
+            
             try:
                 # Get all sensor readings
                 tof = self.client.get_tof()
@@ -132,28 +142,67 @@ class AutonomousDriver:
                 if ultrasonic.get('success') and ultrasonic.get('in_range'):
                     rear_dist = ultrasonic.get('distance_cm', 999)
                 
+                # Calculate approach velocity for predictive collision detection
+                current_time = time.time()
+                front_clearance = min(left_dist, right_dist)
+                approach_rate = 0
+                
+                if self._last_front_dist is not None and self._last_measurement_time is not None:
+                    time_delta = current_time - self._last_measurement_time
+                    if time_delta > 0:
+                        # Negative rate = approaching obstacle
+                        approach_rate = (front_clearance - self._last_front_dist) / time_delta
+                
+                self._last_front_dist = front_clearance
+                self._last_measurement_time = current_time
+                
+                # 🚨 EMERGENCY STOP LOGIC - HIGHEST PRIORITY
+                # If moving forward and front obstacle too close - STOP IMMEDIATELY
+                if self._current_direction == "forward" and front_clearance < EMERGENCY_STOP_DIST:
+                    if not self._emergency_stop_active:
+                        print(f"\r🚨 EMERGENCY STOP! Front:{front_clearance:.0f}cm - TOO CLOSE!")
+                        self.client.stop()  # IMMEDIATE STOP
+                        self._emergency_stop_active = True
+                        self._current_direction = "stopped"
+                        time.sleep(0.1)  # Brief pause to ensure stop command processed
+                        continue
+                
+                # Predictive braking: if approaching too fast, pre-brake
+                if self._current_direction == "forward" and approach_rate < -APPROACH_RATE_THRESHOLD:
+                    print(f"\r⚡ PRE-BRAKE! Approaching at {-approach_rate:.0f}cm/s")
+                    self.client.set_motor(CRAWL_SPEED)  # Immediate slow down
+                    time.sleep(0.05)
+                
+                # Reset emergency flag if cleared
+                if front_clearance > EMERGENCY_STOP_DIST + 10:
+                    self._emergency_stop_active = False
+                
                 # Make navigation decision (no blocking operations)
-                self._navigate(left_dist, right_dist, rear_dist)
+                self._navigate(left_dist, right_dist, rear_dist, approach_rate)
 
             except Exception as e:
                 print(f"\r⚠️  Sensor error: {e}          ")
                 self.client.stop()
+                self._emergency_stop_active = False
                 time.sleep(0.5)
                 continue
 
-            time.sleep(POLL_INTERVAL)
+            # Maintain consistent polling rate
+            loop_duration = time.time() - loop_start
+            sleep_time = max(0, POLL_INTERVAL - loop_duration)
+            time.sleep(sleep_time)
 
     # ── bidirectional navigation logic ──────────────────────────────
 
-    def _navigate(self, left_dist: float, right_dist: float, rear_dist: float):
+    def _navigate(self, left_dist: float, right_dist: float, rear_dist: float, approach_rate: float):
         """
-        Bidirectional navigation with continuous path evaluation.
-        Choose direction with best clearance, no blocking operations.
+        Bidirectional navigation with ANTI-LAG measures and predictive collision detection.
         
         Args:
             left_dist: Front left ToF distance (cm)
             right_dist: Front right ToF distance (cm)
             rear_dist: Rear ultrasonic distance (cm)
+            approach_rate: Rate of distance change (cm/s, negative = approaching)
         """
         # Calculate clearance scores
         front_clearance = min(left_dist, right_dist)  # Worst case matters
@@ -168,33 +217,41 @@ class AutonomousDriver:
                 print(f"\r🚨 TRAPPED! F:{front_clearance:.0f}cm R:{rear_clearance:.0f}cm")
             return
         
+        # If emergency stop was triggered, must clear to much safer distance before resuming
+        if self._emergency_stop_active and front_clearance < SAFE_DIST:
+            # Still too close after emergency stop - must reverse
+            if rear_clearance > REAR_CAUTION_DIST:
+                self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
+            return
+        
         # DECISION: Choose best direction based on clearance
+        # Note: Thresholds are now LARGER to account for lag
         
         # Option 1: Front is very clear - prefer forward movement
         if front_clearance > VERY_SAFE_DIST:
             self._move_forward(left_dist, right_dist, CRUISE_SPEED, "CRUISE")
         
-        # Option 2: Front is safe/caution - continue forward with appropriate speed
+        # Option 2: Front is safe - medium speed
+        elif front_clearance > SAFE_DIST:
+            self._move_forward(left_dist, right_dist, MEDIUM_SPEED, "MEDIUM")
+        
+        # Option 3: Front is caution zone - slow down
         elif front_clearance > CAUTION_DIST:
-            if front_clearance > SAFE_DIST:
-                self._move_forward(left_dist, right_dist, MEDIUM_SPEED, "MEDIUM")
+            self._move_forward(left_dist, right_dist, SLOW_SPEED, "SLOW")
+        
+        # Option 4: Front in danger zone - crawl or reverse
+        elif front_clearance > DANGER_DIST:
+            # If approaching fast, prefer reverse over crawl
+            if approach_rate < -10 and rear_clearance > REAR_CAUTION_DIST:
+                self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
             else:
-                self._move_forward(left_dist, right_dist, SLOW_SPEED, "SLOW")
+                self._move_forward(left_dist, right_dist, CRAWL_SPEED, "CRAWL")
         
-        # Option 3: Front danger zone - can we reverse instead?
-        elif front_clearance < DANGER_DIST and rear_clearance > REAR_SAFE_DIST:
-            # Rear is much clearer - reverse away
-            self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_FAST)
-        
-        # Option 4: Front in danger, rear somewhat clear - slow reverse
-        elif front_clearance < DANGER_DIST and rear_clearance > REAR_CAUTION_DIST:
+        # Option 5: Front critical - must reverse if rear clear
+        elif front_clearance >= CRITICAL_DIST and rear_clearance > REAR_CAUTION_DIST:
             self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
         
-        # Option 5: Front tight but navigable - crawl forward with steering
-        elif front_clearance >= CRITICAL_DIST:
-            self._move_forward(left_dist, right_dist, CRAWL_SPEED, "CRAWL")
-        
-        # Option 6: Everything tight - try gentle reverse if possible
+        # Option 6: Front very critical - reverse even if rear tight
         elif rear_clearance > REAR_DANGER_DIST:
             self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
         
@@ -207,7 +264,11 @@ class AutonomousDriver:
                 print(f"\r⚠️ No safe path: F:{front_clearance:.0f}cm R:{rear_clearance:.0f}cm")
 
     def _move_forward(self, left_dist: float, right_dist: float, speed: int, mode: str):
-        """Move forward with intelligent steering based on side clearances."""
+        """Move forward with intelligent steering - ANTI-LAG: reduced speeds."""
+        # Skip if emergency stop active
+        if self._emergency_stop_active:
+            return
+        
         # Determine steering based on which side has more clearance
         clearance_diff = abs(left_dist - right_dist)
         
@@ -233,9 +294,14 @@ class AutonomousDriver:
             servo = CENTRE
             steer_label = "↑"
         
-        self.client.set_servo(servo)
-        self.client.set_motor(speed)
-        self._current_direction = "forward"
+        # Only send commands if direction/speed changed
+        if self._current_direction != "forward":
+            self.client.set_servo(servo)
+            self.client.set_motor(speed)
+            self._current_direction = "forward"
+        else:
+            # Just update servo if needed (faster than motor command)
+            self.client.set_servo(servo)
         
         min_dist = min(left_dist, right_dist)
         print(f"\r🟢 {mode} {steer_label} L:{left_dist:.0f} R:{right_dist:.0f} [{speed}%]", end="")

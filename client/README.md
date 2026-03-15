@@ -449,7 +449,7 @@ while True:
 ```
 
 **Solutions:**
-1. Update IP address in `PICO_IP` variable at top of file
+1. Create `config.py` from `config.example.py` and set your IP address
 2. Verify PiCar is powered on and connected to WiFi
 3. Check firewall settings
 4. Try pinging the IP: `ping 192.168.x.x`
@@ -500,12 +500,15 @@ The client uses these HTTP endpoints on the PiCar:
 
 ### Change IP Address
 
-Edit the `PICO_IP` constant at the top of `picar_client.py`:
+Create `config.py` from the template and set your IP:
 
-```python
-PICO_IP = "192.168.1.100"  # Your PiCar's IP address
-BASE_URL = f"http://{PICO_IP}:5000"
+```bash
+cp config.example.py config.py
+# Edit config.py and set:
+# car_ip = "192.168.1.100"  # Your PiCar's actual IP address
 ```
+
+The client will automatically import from `config.py`. If the file is missing, it falls back to the hardcoded default.
 
 ### Adjust Motor Speeds
 

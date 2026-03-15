@@ -9,8 +9,8 @@ import time
 import display
 
 # ========== HC-SR04 Configuration ==========
-TRIGGER_PIN = 20  # GP20
-ECHO_PIN = 21     # GP21
+TRIGGER_PIN = 14  # GP20
+ECHO_PIN = 15     # GP21
 MAX_DISTANCE_CM = 400  # Maximum measurable distance
 TIMEOUT_US = int(MAX_DISTANCE_CM * 58.8)  # Timeout for pulse measurement
 

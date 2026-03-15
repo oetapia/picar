@@ -1,7 +1,7 @@
 import machine
 import display
 
-servo = machine.PWM(machine.Pin(6))
+servo = machine.PWM(machine.Pin(22))
 servo.freq(50)  # 50Hz standard
 
 current_angle = 0  # -90 (left) to +90 (right), 0 = center

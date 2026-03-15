@@ -377,6 +377,7 @@ def api_lights_control(request, status):
     
     return create_cors_response(response_data)
 
+<<<<<<< HEAD
 @app.route('/api/proximity_guard')
 def api_proximity_guard(request):
     """Get proximity guard status (Pico-side emergency stop)."""
@@ -391,6 +392,8 @@ def api_proximity_guard(request):
     }
     return create_cors_response(response_data)
 
+=======
+>>>>>>> 41268e1 (lights via api)
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}

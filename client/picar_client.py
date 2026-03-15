@@ -1,7 +1,10 @@
 import requests
 import time
 import sys
+<<<<<<< HEAD
 import threading
+=======
+>>>>>>> 092e0ed (migrated to config instead of secrets)
 from pathlib import Path
 
 # Import config from parent directory

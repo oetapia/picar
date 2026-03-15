@@ -29,6 +29,9 @@ If L_dist > R_dist: Wall is angled to the right
 If L_dist ≈ R_dist: Wall is perpendicular (straight ahead)
 """
 
+import sys
+sys.path.insert(0, '/sensors')  # For mpremote run from root
+
 import math
 try:
     from .dual_tof_sensor import DualToFSensor

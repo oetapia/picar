@@ -9,6 +9,9 @@ Displays:
 - Navigation arrows
 """
 
+import sys
+sys.path.insert(0, '/sensors')  # For mpremote run from root
+
 import time
 import display
 try:

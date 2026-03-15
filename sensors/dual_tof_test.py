@@ -3,6 +3,9 @@ Dual ToF Sensor Test Script
 Simple test to verify both VL53L0X sensors are working
 """
 
+import sys
+sys.path.insert(0, '/sensors')  # For mpremote run from root
+
 from dual_tof_sensor import DualToFSensor
 import time
 

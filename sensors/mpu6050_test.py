@@ -5,6 +5,9 @@ Uses I2C0: SDA=GP4, SCL=GP5
 Displays sensor data on OLED screen
 """
 
+import sys
+sys.path.insert(0, '/sensors')  # For mpremote run from root
+
 import machine
 import time
 import math

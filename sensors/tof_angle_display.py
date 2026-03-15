@@ -37,7 +37,7 @@ def format_angle_for_display(angle_data):
     elif orientation == 'angled_left':
         indicator = "/"  # Angled left
     else:
-        indicator = "\\"  # Angled right
+        indicator = ">"  # Angled right (using > instead of backslash for REPL compatibility)
     
     line1 = f"{indicator} {angle:+5.1f}deg"
     
@@ -216,7 +216,7 @@ def show_angle_legend():
         ("Legend", "> = turn right"),
         ("Legend", "| = wall ahead"),
         ("Legend", "/ = wall left"),
-        ("Legend", "\\ = wall right"),
+        ("Legend", "> = wall right"),
     ]
     
     for header, text in legends:

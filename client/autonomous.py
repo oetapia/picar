@@ -16,10 +16,10 @@ REVERSE_FAST       = -35   # fast reverse (was -40)
 REVERSE_SLOW       = -22   # slow reverse (was -25)
 
 # Steering angles
-STEER_LEFT         =  50   # hard left
-STEER_SLIGHT_LEFT  =  75   # gentle left nudge
-STEER_RIGHT        = 130   # hard right
-STEER_SLIGHT_RIGHT = 105   # gentle right nudge
+STEER_LEFT         =  0   # hard left
+STEER_SLIGHT_LEFT  =  35   # gentle left nudge
+STEER_RIGHT        = 180   # hard right
+STEER_SLIGHT_RIGHT = 145   # gentle right nudge
 CENTRE             =  90
 
 # Timing - AGGRESSIVE POLLING to minimize lag

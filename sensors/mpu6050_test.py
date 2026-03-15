@@ -15,8 +15,8 @@ except ImportError:
 
 # ========== MPU-6050 Configuration ==========
 MPU6050_ADDR = 0x68      # Default I2C address
-SDA_PIN = 4              # GP4
-SCL_PIN = 5              # GP5
+SDA_PIN = 8              # GP4
+SCL_PIN = 9              # GP5
 I2C_BUS = 0              # I2C0
 I2C_FREQ = 400_000       # 400kHz
 
@@ -259,10 +259,11 @@ def main():
             # Print to console
             measurement_count += 1
             if ax is not None:
-                print(f"[{measurement_count:04d}] "
-                      f"Accel: X={ax:+.3f}g Y={ay:+.3f}g Z={az:+.3f}g | "
-                      f"Gyro: X={gx:+.1f}d/s Y={gy:+.1f}d/s Z={gz:+.1f}d/s | "
-                      f"Pitch={pitch:+.1f}deg Roll={roll:+.1f}deg | {orientation}")
+                message1 = f"[{measurement_count:04d}] "
+                message2 = f"Accel: X={ax:+.3f}g Y={ay:+.3f}g Z={az:+.3f}g | "
+                message3 = f"Gyro: X={gx:+.1f}d/s Y={gy:+.1f}d/s Z={gz:+.1f}d/s |"
+                message4 = f"Pitch={pitch:+.1f}deg Roll={roll:+.1f}deg | {orientation}"
+                print(message1, message2, message3, message4)
             else:
                 print(f"[{measurement_count:04d}] Read error")
             

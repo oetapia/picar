@@ -129,9 +129,11 @@ def run_angle_display(sensor_spacing_cm=15.0, update_rate_hz=5):
             
             # Print to console
             if angle_data:
-                print(f"[{count:04d}] Angle: {angle_data['angle_degrees']:+6.2f}deg | "
-                      f"Dist: {angle_data['wall_distance_cm']:5.1f}cm | "
-                      f"Orient: {angle_data['orientation']}")
+                
+                message1 = f"[{count:04d}] Angle: {angle_data['angle_degrees']:+6.2f}deg | "
+                message2 = f"Dist: {angle_data['wall_distance_cm']:5.1f}cm | "
+                message3 = f"Orient: {angle_data['orientation']}"
+                print(message1,message2,message3)
             else:
                 print(f"[{count:04d}] No valid reading")
             

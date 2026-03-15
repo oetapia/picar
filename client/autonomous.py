@@ -6,53 +6,80 @@ import time
 
 from picar_client import PicarClient
 
-# ── driving parameters ───────────────────────────────────────────────
-DRIVE_SPEED        =  55   # normal cruising speed
-CORRECTION_SPEED   =  35   # slower speed while steering around an obstacle
-REVERSE_SPEED      = -50
+# ── driving parameters (physics-based) ───────────────────────────────
+# Speed settings - progressive control based on clearance
+CRUISE_SPEED       =  45   # full speed when clear (>80cm) - ~50 cm/s
+MEDIUM_SPEED       =  30   # moderate speed for caution zone (50-80cm)
+SLOW_SPEED         =  20   # slow speed for warning zone (30-50cm)
+CRAWL_SPEED        =  15   # very slow for tight navigation (<30cm)
+REVERSE_FAST       = -40   # fast reverse when rear clear (>50cm)
+REVERSE_SLOW       = -25   # slow reverse in caution zone (30-50cm)
+
+# Steering angles
 STEER_LEFT         =  50   # hard left
 STEER_SLIGHT_LEFT  =  75   # gentle left nudge
 STEER_RIGHT        = 130   # hard right
 STEER_SLIGHT_RIGHT = 105   # gentle right nudge
 CENTRE             =  90
-POLL_INTERVAL      =  0.15 # seconds between sensor polls
-CORRECTION_HOLD    =  0.5  # seconds to hold a steering correction
-REVERSE_TIMEOUT    =  1.0  # max seconds to reverse before re-evaluating
 
-# ── distance thresholds (cm) ─────────────────────────────────────────
-TOF_STOP_DISTANCE    = 15  # stop if either front sensor detects obstacle closer than this
-TOF_SLOW_DISTANCE    = 30  # reduce speed if obstacle detected within this range
-TOF_STEER_DISTANCE   = 40  # start steering correction at this distance
-ULTRASONIC_STOP_DIST = 20  # stop reversing if rear obstacle closer than this
-ULTRASONIC_WARN_DIST = 40  # warning zone for rear obstacles
+# Timing - faster response for better reaction
+POLL_INTERVAL      =  0.08 # seconds between sensor polls (~4cm at cruise)
+MIN_MANEUVER_TIME  =  0.3  # minimum time to hold a direction change
+
+# ── distance thresholds (cm) - physics-based stopping distances ──────
+# Front distance zones (accounting for 250-350ms reaction time)
+VERY_SAFE_DIST     = 80    # full cruise speed safe
+SAFE_DIST          = 50    # medium speed zone
+CAUTION_DIST       = 30    # slow speed zone
+DANGER_DIST        = 25    # prepare to change direction
+CRITICAL_DIST      = 20    # must change direction immediately
+
+# Rear distance zones
+REAR_SAFE_DIST     = 50    # safe to reverse at speed
+REAR_CAUTION_DIST  = 30    # slow reverse only
+REAR_DANGER_DIST   = 20    # cannot reverse safely
+
+# Clearance scoring weights
+MIN_SAFE_SCORE     = 40    # minimum clearance to move in any direction
 
 
 class AutonomousDriver:
     """
-    Uses ToF (Time-of-Flight) sensors for front obstacle detection and
-    ultrasonic sensor for rear obstacle detection.
+    Bidirectional autonomous navigation using physics-based collision avoidance.
 
     Sensors:
     ────────────────────────────────────────────────────
     - Dual VL53L0X ToF (front left & right): distance measurements in cm
     - HC-SR04 Ultrasonic (rear): distance measurement in cm
-    - MPU-6050 Accelerometer (optional): tilt/orientation awareness
+    - Continuous 360° awareness for optimal path selection
 
-    Navigation logic:
+    Navigation Strategy:
     ────────────────────────────────────────────────────
-    Front distances > 40cm        → full speed ahead, centred
-    Left < 40cm                   → gentle right nudge
-    Right < 40cm                  → gentle left nudge
-    Both < 30cm                   → slow down
-    Both < 15cm                   → reverse with guidance
-    Rear < 20cm while reversing   → stop immediately
+    1. Every loop: evaluate clearance in BOTH directions
+    2. Choose direction with best clearance score
+    3. Progressive speed control based on obstacle distance
+    4. No blocking operations - continuous sensor monitoring
+    5. Instant direction changes when needed
+    
+    Distance Zones (based on reaction time physics):
+    ────────────────────────────────────────────────────
+    > 80cm: VERY SAFE    → cruise speed (45%)
+    50-80cm: SAFE        → medium speed (30%)
+    30-50cm: CAUTION     → slow speed (20%)
+    25-30cm: DANGER      → crawl/evaluate direction
+    < 25cm: CRITICAL     → change direction immediately
+    
+    Reaction time: ~250-350ms (sensor + network + motor)
+    At cruise speed: car travels ~17cm during reaction
+    Therefore: detect at 25cm to stop at ~8cm minimum
     """
 
     def __init__(self, client: PicarClient):
         self.client = client
         self.autonomous = False
         self._thread = None
-        self._last_distances = None
+        self._last_action_time = 0
+        self._current_direction = "stopped"  # "forward", "backward", "stopped"
 
     # ── public controls ──────────────────────────────────────────────
 
@@ -60,159 +87,182 @@ class AutonomousDriver:
         if self.autonomous:
             return
         self.autonomous = True
-        self._last_distances = None
+        self._last_action_time = time.time()
+        self._current_direction = "stopped"
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        print("\r🚗 Autonomous ON - Using ToF + Ultrasonic sensors")
+        print("\r🚗 Autonomous ON - Bidirectional Navigation")
+        print("\r   Physics-based collision avoidance active")
 
     def stop(self):
         self.autonomous = False
         self.client.stop()
         self.client.centre()
-        print("\r🛑 Autonomous OFF                ")
+        self._current_direction = "stopped"
+        print("\r🛑 Autonomous OFF - Vehicle stopped")
 
     # ── sensor loop (background thread) ─────────────────────────────
 
     def _loop(self):
         while self.autonomous:
             try:
-                # Get ToF sensors (front left and right)
+                # Get all sensor readings
                 tof = self.client.get_tof()
+                ultrasonic = self.client.get_ultrasonic()
                 
+                # Validate ToF sensors
                 if not tof.get('success'):
-                    print("\r⚠️  ToF sensors unavailable    ")
+                    print("\r⚠️  ToF sensors unavailable - stopping")
+                    self.client.stop()
                     time.sleep(0.5)
                     continue
                 
+                # Extract front distances
                 left_dist = tof.get('left_distance_cm')
                 right_dist = tof.get('right_distance_cm')
                 
-                # Handle None values (sensor read failures)
+                # Handle None values (sensor failures)
                 if left_dist is None:
-                    left_dist = 999  # Assume clear if sensor fails
+                    left_dist = 999
                 if right_dist is None:
-                    right_dist = 999  # Assume clear if sensor fails
+                    right_dist = 999
                 
-                # Check if distances changed significantly (> 5cm change)
-                distances = (left_dist, right_dist)
-                if self._last_distances is None or \
-                   abs(left_dist - self._last_distances[0]) > 5 or \
-                   abs(right_dist - self._last_distances[1]) > 5:
-                    
-                    self._last_distances = distances
-                    did_maneuver = self._react(left_dist, right_dist)
-                    
-                    # Force re-evaluation after a timed maneuver
-                    if did_maneuver:
-                        self._last_distances = None
+                # Extract rear distance
+                rear_dist = 999  # Default: assume clear
+                if ultrasonic.get('success') and ultrasonic.get('in_range'):
+                    rear_dist = ultrasonic.get('distance_cm', 999)
+                
+                # Make navigation decision (no blocking operations)
+                self._navigate(left_dist, right_dist, rear_dist)
 
             except Exception as e:
                 print(f"\r⚠️  Sensor error: {e}          ")
+                self.client.stop()
                 time.sleep(0.5)
                 continue
 
             time.sleep(POLL_INTERVAL)
 
-    # ── decision logic ───────────────────────────────────────────────
+    # ── bidirectional navigation logic ──────────────────────────────
 
-    def _react(self, left_dist: float, right_dist: float) -> bool:
+    def _navigate(self, left_dist: float, right_dist: float, rear_dist: float):
         """
-        React to current ToF distance measurements.
-        Returns True if a timed maneuver was performed (caller resets state).
+        Bidirectional navigation with continuous path evaluation.
+        Choose direction with best clearance, no blocking operations.
         
         Args:
-            left_dist: Distance in cm from left front ToF sensor
-            right_dist: Distance in cm from right front ToF sensor
+            left_dist: Front left ToF distance (cm)
+            right_dist: Front right ToF distance (cm)
+            rear_dist: Rear ultrasonic distance (cm)
         """
-        min_dist = min(left_dist, right_dist)
+        # Calculate clearance scores
+        front_clearance = min(left_dist, right_dist)  # Worst case matters
+        rear_clearance = rear_dist
         
-        # CRITICAL: Both sensors detect very close obstacle - must reverse
-        if min_dist < TOF_STOP_DISTANCE:
-            print(f"\r🚨 STOP! Front obstacle {min_dist:.0f}cm - reversing")
-            self._reverse_guided(left_dist, right_dist)
-            return True
+        # CRITICAL: Too close on all sides - TRAPPED
+        if front_clearance < CRITICAL_DIST and rear_clearance < REAR_DANGER_DIST:
+            if self._current_direction != "stopped":
+                self.client.stop()
+                self.client.centre()
+                self._current_direction = "stopped"
+                print(f"\r🚨 TRAPPED! F:{front_clearance:.0f}cm R:{rear_clearance:.0f}cm")
+            return
         
-        # WARNING: Close obstacle - slow down and steer away
-        if min_dist < TOF_SLOW_DISTANCE:
-            # Determine which side is clearer
-            if left_dist < right_dist:
-                # Obstacle closer on left - steer right
-                self.client.set_motor(CORRECTION_SPEED)
-                self.client.set_servo(STEER_RIGHT)
-                print(f"\r⚠️  L:{left_dist:.0f}cm R:{right_dist:.0f}cm - hard right")
+        # DECISION: Choose best direction based on clearance
+        
+        # Option 1: Front is very clear - prefer forward movement
+        if front_clearance > VERY_SAFE_DIST:
+            self._move_forward(left_dist, right_dist, CRUISE_SPEED, "CRUISE")
+        
+        # Option 2: Front is safe/caution - continue forward with appropriate speed
+        elif front_clearance > CAUTION_DIST:
+            if front_clearance > SAFE_DIST:
+                self._move_forward(left_dist, right_dist, MEDIUM_SPEED, "MEDIUM")
             else:
-                # Obstacle closer on right - steer left
-                self.client.set_motor(CORRECTION_SPEED)
-                self.client.set_servo(STEER_LEFT)
-                print(f"\r⚠️  L:{left_dist:.0f}cm R:{right_dist:.0f}cm - hard left")
-            time.sleep(CORRECTION_HOLD)
-            return True
+                self._move_forward(left_dist, right_dist, SLOW_SPEED, "SLOW")
         
-        # CAUTION: Obstacle detected - gentle correction
-        if left_dist < TOF_STEER_DISTANCE or right_dist < TOF_STEER_DISTANCE:
-            if left_dist < right_dist:
-                # Obstacle on left - nudge right
-                self.client.set_motor(CORRECTION_SPEED)
-                self.client.set_servo(STEER_SLIGHT_RIGHT)
-                print(f"\r↗️  L:{left_dist:.0f}cm R:{right_dist:.0f}cm - nudge right")
-            else:
-                # Obstacle on right - nudge left
-                self.client.set_motor(CORRECTION_SPEED)
-                self.client.set_servo(STEER_SLIGHT_LEFT)
-                print(f"\r↖️  L:{left_dist:.0f}cm R:{right_dist:.0f}cm - nudge left")
-            time.sleep(CORRECTION_HOLD)
-            return True
+        # Option 3: Front danger zone - can we reverse instead?
+        elif front_clearance < DANGER_DIST and rear_clearance > REAR_SAFE_DIST:
+            # Rear is much clearer - reverse away
+            self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_FAST)
         
-        # ALL CLEAR - full speed ahead
-        self.client.set_servo(CENTRE)
-        self.client.set_motor(DRIVE_SPEED)
-        print(f"\r✅ Clear L:{left_dist:.0f}cm R:{right_dist:.0f}cm - forward")
-        return False
-
-    def _reverse_guided(self, left_dist: float, right_dist: float):
-        """
-        Reverse while actively steering away from the front obstacle.
+        # Option 4: Front in danger, rear somewhat clear - slow reverse
+        elif front_clearance < DANGER_DIST and rear_clearance > REAR_CAUTION_DIST:
+            self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
         
-        Steering logic: steer toward the side with more clearance to maximize
-        escape angle. Monitor rear ultrasonic sensor to avoid backing into obstacles.
+        # Option 5: Front tight but navigable - crawl forward with steering
+        elif front_clearance >= CRITICAL_DIST:
+            self._move_forward(left_dist, right_dist, CRAWL_SPEED, "CRAWL")
         
-        Args:
-            left_dist: Distance in cm from left front ToF sensor
-            right_dist: Distance in cm from right front ToF sensor
-        """
-        # Determine steering direction based on which front side has more clearance
-        if left_dist < right_dist:
-            # Right side is clearer - steer right while reversing
-            steer = STEER_RIGHT
-            print(f"\r⬅️  Reversing right (clearer)")
+        # Option 6: Everything tight - try gentle reverse if possible
+        elif rear_clearance > REAR_DANGER_DIST:
+            self._move_backward(left_dist, right_dist, rear_clearance, REVERSE_SLOW)
+        
+        # Option 7: No good options - stop
         else:
-            # Left side is clearer - steer left while reversing
-            steer = STEER_LEFT
-            print(f"\r➡️  Reversing left (clearer)")
+            if self._current_direction != "stopped":
+                self.client.stop()
+                self.client.centre()
+                self._current_direction = "stopped"
+                print(f"\r⚠️ No safe path: F:{front_clearance:.0f}cm R:{rear_clearance:.0f}cm")
+
+    def _move_forward(self, left_dist: float, right_dist: float, speed: int, mode: str):
+        """Move forward with intelligent steering based on side clearances."""
+        # Determine steering based on which side has more clearance
+        clearance_diff = abs(left_dist - right_dist)
         
-        self.client.set_motor(REVERSE_SPEED)
-        self.client.set_servo(steer)
+        if clearance_diff > 15:  # Significant difference
+            if left_dist < right_dist:
+                # Left side tighter - steer right
+                if clearance_diff > 30:
+                    servo = STEER_RIGHT
+                    steer_label = "→→"
+                else:
+                    servo = STEER_SLIGHT_RIGHT
+                    steer_label = "→"
+            else:
+                # Right side tighter - steer left
+                if clearance_diff > 30:
+                    servo = STEER_LEFT
+                    steer_label = "←←"
+                else:
+                    servo = STEER_SLIGHT_LEFT
+                    steer_label = "←"
+        else:
+            # Both sides similar - go straight
+            servo = CENTRE
+            steer_label = "↑"
         
-        deadline = time.time() + REVERSE_TIMEOUT
-        while self.autonomous and time.time() < deadline:
-            time.sleep(0.1)
-            try:
-                # Check rear ultrasonic sensor
-                ultrasonic = self.client.get_ultrasonic()
-                if ultrasonic.get('success') and ultrasonic.get('in_range'):
-                    rear_dist = ultrasonic.get('distance_cm', 999)
-                    if rear_dist < ULTRASONIC_STOP_DIST:
-                        print(f"\r🚨 Rear obstacle {rear_dist:.0f}cm - stopping!")
-                        break
-                    elif rear_dist < ULTRASONIC_WARN_DIST:
-                        print(f"\r⚠️  Rear {rear_dist:.0f}cm - caution")
-            except Exception:
-                # If ultrasonic fails, continue with timeout-based reversal
-                pass
+        self.client.set_servo(servo)
+        self.client.set_motor(speed)
+        self._current_direction = "forward"
         
-        if self.autonomous:
-            self.client.set_motor(0)
-            self.client.centre()
+        min_dist = min(left_dist, right_dist)
+        print(f"\r🟢 {mode} {steer_label} L:{left_dist:.0f} R:{right_dist:.0f} [{speed}%]", end="")
+
+    def _move_backward(self, left_dist: float, right_dist: float, rear_dist: float, speed: int):
+        """Move backward with steering away from front obstacles."""
+        # Steer to open up escape angle for next forward movement
+        if abs(left_dist - right_dist) > 10:
+            if left_dist < right_dist:
+                # Left blocked more - steer right (nose goes left when reversing)
+                servo = STEER_RIGHT
+                steer_label = "⤴"
+            else:
+                # Right blocked more - steer left (nose goes right when reversing)
+                servo = STEER_LEFT
+                steer_label = "⤵"
+        else:
+            # Center steering for straight reverse
+            servo = CENTRE
+            steer_label = "↓"
+        
+        self.client.set_servo(servo)
+        self.client.set_motor(speed)
+        self._current_direction = "backward"
+        
+        print(f"\r🔵 REVERSE {steer_label} Rear:{rear_dist:.0f}cm [{speed}%]", end="")
+
 
 
 def main():

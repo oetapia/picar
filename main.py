@@ -8,6 +8,7 @@ import display
 import motor
 import servo
 import wifi
+import lights
 from sensors import accelerometer
 from sensors import dual_tof
 from sensors import hcsr04
@@ -247,6 +248,73 @@ def api_ultrasonic(request):
         }
     return create_cors_response(response_data)
 
+@app.route('/api/lights')
+def api_lights_status(request):
+    """Get current light status."""
+    state = lights.get_state()
+    if state['available']:
+        response_data = {
+            'success': True,
+            'front': state['front'],
+            'back': state['back'],
+            'status': state['status'],
+            'timestamp': state['timestamp'],
+            'message': f'Lights: {state["status"]}'
+        }
+    else:
+        response_data = {
+            'success': False,
+            'message': 'Lights not available',
+            'available': False
+        }
+    return create_cors_response(response_data)
+
+@app.route('/api/lights/<status>')
+def api_lights_control(request, status):
+    """Control lights with status: front, back, both, off."""
+    led.on()
+    try:
+        status = status.lower()
+        
+        if status == 'front':
+            lights.lights_front()
+            message = 'Front lights on'
+        elif status == 'back':
+            lights.lights_back()
+            message = 'Back lights on'
+        elif status == 'both':
+            lights.lights_both()
+            message = 'Both lights on'
+        elif status == 'off':
+            lights.lights_off()
+            message = 'Lights off'
+        else:
+            led.off()
+            return create_cors_response({
+                'success': False,
+                'message': f'Invalid status: {status}. Use: front, back, both, or off'
+            }, status_code=400)
+        
+        state = lights.get_state()
+        _on_command(request, f"Lights: {state['status']}")
+        
+        response_data = {
+            'success': True,
+            'front': state['front'],
+            'back': state['back'],
+            'status': state['status'],
+            'message': message
+        }
+        print(message)
+        
+    except Exception as e:
+        response_data = {'success': False, 'message': f'Lights error: {e}'}
+        print(f"Lights error: {e}")
+    finally:
+        led.off()
+    
+    return create_cors_response(response_data)
+
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}
@@ -261,6 +329,7 @@ async def start_server():
     else:
         print("WiFi not connected - server will run on localhost only")
         display.update_display(header="Server Ready", text="WiFi Failed")
+    asyncio.create_task(lights.monitor())
     asyncio.create_task(accelerometer.monitor())
     asyncio.create_task(dual_tof.monitor())
     asyncio.create_task(hcsr04.monitor())

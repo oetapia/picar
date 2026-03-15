@@ -7,12 +7,8 @@ AIN1 = machine.Pin(11, machine.Pin.OUT)
 AIN2 = machine.Pin(12, machine.Pin.OUT)
 PWMA = machine.PWM(machine.Pin(10))
 STBY = machine.Pin(13, machine.Pin.OUT)
-light_back = machine.Pin(2, machine.Pin.OUT)
-light_front = machine.Pin(5, machine.Pin.OUT)
 
 PWMA.freq(1000)
-light_back.off()
-light_front.off()
 
 current_motor_speed = 0  # signed: + = forward, - = reverse
 
@@ -25,8 +21,6 @@ def update_motor():
         PWMA.duty_u16(0)
         AIN1.low()
         AIN2.low()
-        light_back.off()
-        light_front.off()
     else:
         STBY.high()
 
@@ -43,13 +37,9 @@ def update_motor():
         if direction > 0:
             AIN1.high()
             AIN2.low()
-            light_front.on()
-            light_back.off()
         else:
             AIN1.low()
             AIN2.high()
-            light_front.off()
-            light_back.on()
 
         PWMA.duty_u16(speed_value)
 

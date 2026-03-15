@@ -1,5 +1,5 @@
-#secrets
-secrets.py
+#config - contains sensitive IPs and passwords
+config.py
 source/
 
 #venv

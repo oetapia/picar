@@ -1,9 +1,23 @@
 import requests
 import time
-import secrets
+import sys
+from pathlib import Path
 
-PICAR_IP = secrets.car_ip 
-BASE_URL = f"http://{PICO_IP}:5000"
+# Import config from parent directory
+try:
+    # Try importing from parent directory (when run from anywhere)
+    parent_dir = Path(__file__).parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+    import config
+    PICAR_IP = config.car_ip
+except (ImportError, AttributeError):
+    # Fallback to hardcoded IP if config.py not found
+    print("⚠️  Warning: Could not import config.py, using default IP")
+    print("   Create config.py from config.example.py template")
+    PICAR_IP = "192.168.178.30"
+
+BASE_URL = f"http://{PICAR_IP}:5000"
 
 
 class PicarClient:

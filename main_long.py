@@ -3,7 +3,7 @@ import machine
 import network
 import json
 from microdot import Microdot, Response
-import secrets  # WiFi credentials
+import config  # WiFi credentials
 
 # Import your custom modules
 import display
@@ -109,13 +109,13 @@ def display_motor_status():
 
 # ========== WiFi Connection ==========
 def connect_wifi():
-    """Connect to WiFi using secrets.py"""
+    """Connect to WiFi using config.py"""
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     
     if not wlan.isconnected():
-        print(f'Connecting to WiFi: {secrets.ssid}')
-        wlan.connect(secrets.ssid, secrets.password)
+        print(f'Connecting to WiFi: {config.ssid}')
+        wlan.connect(config.ssid, config.password)
         
         # Wait for connection with timeout
         timeout = 10

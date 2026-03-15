@@ -11,9 +11,9 @@ import display
 
 # ========== I2C Scanner Configuration ==========
 # Default bus configuration (can be changed)
-I2C_BUS_ID = 0        # I2C bus number (0 or 1)
-I2C_SDA_PIN = 20      # SDA pin
-I2C_SCL_PIN = 21      # SCL pin
+I2C_BUS_ID = 1        # I2C bus number (0 or 1)
+I2C_SDA_PIN = 26      # SDA pin
+I2C_SCL_PIN = 27      # SCL pin
 I2C_FREQ = 400_000    # 400kHz (standard fast mode)
 
 # Known device addresses for reference

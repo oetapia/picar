@@ -44,7 +44,7 @@ def run():
     print("-" * 40)
     
     # Initialize I2C
-    i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=400000)
+    i2c = I2C(1, sda=Pin(26), scl=Pin(27), freq=400000)
     
     # Check if display is available
     use_display = display is not None and hasattr(display, 'display') and display.display is not None

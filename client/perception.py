@@ -33,16 +33,34 @@ class IMUData:
     orientation: str
     available: bool
     timestamp: float
+    motor_speed: int = 0  # Motor speed from status API (-100 to 100, 0 = stopped)
     
     @property
     def is_moving(self, threshold: float = 0.1) -> bool:
-        """Check if vehicle is moving based on acceleration."""
+        """
+        Check if vehicle is moving with motor-validated detection.
+        
+        Prevents false positives from gravity on tilted surfaces by
+        requiring BOTH motor activity AND IMU acceleration.
+        
+        Industry standard: Multi-modal sensor fusion with ground truth.
+        """
+        # If motors stopped, vehicle is definitely not moving
+        if self.motor_speed == 0:
+            return False
+        
+        # Motors running - validate with IMU acceleration
         return abs(self.accel_x) > threshold or abs(self.accel_y) > threshold
     
     @property
     def acceleration_magnitude(self) -> float:
         """Calculate total acceleration magnitude."""
         return (self.accel_x**2 + self.accel_y**2 + self.accel_z**2)**0.5
+    
+    @property
+    def motors_active(self) -> bool:
+        """Check if motors are currently running."""
+        return self.motor_speed != 0
 
 
 @dataclass
@@ -398,12 +416,13 @@ class PerceptionSystem:
 # UTILITY FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════
 
-def parse_imu_state(imu_state: dict) -> Optional[IMUData]:
+def parse_imu_state(imu_state: dict, motor_speed: int = 0) -> Optional[IMUData]:
     """
     Parse IMU state dictionary into IMUData object.
     
     Args:
         imu_state: Dictionary from client.get_accelerometer() API
+        motor_speed: Current motor speed from status API (-100 to 100)
     
     Returns:
         IMUData object or None if unavailable
@@ -428,7 +447,8 @@ def parse_imu_state(imu_state: dict) -> Optional[IMUData]:
             roll=imu_state['tilt']['roll'],
             orientation=imu_state.get('orientation', 'unknown'),
             available=True,
-            timestamp=imu_state.get('timestamp', time.time())
+            timestamp=imu_state.get('timestamp', time.time()),
+            motor_speed=motor_speed  # Include motor state for motion validation
         )
     except (KeyError, TypeError) as e:
         # Debug: print what keys we actually got

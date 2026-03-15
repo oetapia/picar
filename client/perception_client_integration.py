@@ -23,6 +23,14 @@ def read_sensors_for_perception(client) -> Tuple[Optional[float], Optional[float
     tof_right = None
     ultrasonic_rear = None
     imu_data = None
+    motor_speed = 0
+    
+    # Read motor status (for motion validation)
+    try:
+        status = client.status()
+        motor_speed = status.get('motor_speed', 0)
+    except Exception as e:
+        print(f"Warning: Status read failed: {e}")
     
     # Read ToF sensors
     try:
@@ -50,10 +58,10 @@ def read_sensors_for_perception(client) -> Tuple[Optional[float], Optional[float
     except Exception as e:
         print(f"Warning: Ultrasonic read failed: {e}")
     
-    # Read IMU/accelerometer
+    # Read IMU/accelerometer with motor speed for motion validation
     try:
         imu_state = client.get_accelerometer()
-        imu_data = parse_imu_state(imu_state)
+        imu_data = parse_imu_state(imu_state, motor_speed)
     except Exception as e:
         print(f"Warning: IMU read failed: {e}")
     

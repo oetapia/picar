@@ -112,11 +112,20 @@ def test_perception_system():
             else:
                 print("No obstacles detected")
             
-            # Display IMU
+            # Display IMU with motor-validated motion detection
             if state.imu_data and state.imu_data.available:
                 imu = state.imu_data
                 print(f"IMU: Accel=({imu.accel_x:+.2f}, {imu.accel_y:+.2f}, {imu.accel_z:+.2f})g | "
-                      f"Orientation={imu.orientation} | Moving={imu.is_moving}")
+                      f"Orientation={imu.orientation}")
+                print(f"Motor: Speed={imu.motor_speed} | Motors Active={imu.motors_active} | "
+                      f"Moving (Validated)={imu.is_moving}")
+                
+                # Show motion detection breakdown
+                imu_has_accel = abs(imu.accel_x) > 0.1 or abs(imu.accel_y) > 0.1
+                if imu.motor_speed == 0 and imu_has_accel:
+                    print("  ℹ️  IMU detects acceleration BUT motors stopped → Tilted surface (not moving)")
+                elif imu.motor_speed != 0 and not imu_has_accel:
+                    print("  ⚠️  Motors running BUT no IMU acceleration → Possible wheel slip or IMU issue")
                 
                 # Check for sudden stop (collision detection)
                 if perception.detect_sudden_stop():

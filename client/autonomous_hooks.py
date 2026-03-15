@@ -375,12 +375,17 @@ def should_tactical_reverse(front_clearance: float,
                            rear_clearance: float,
                            approach_rate: float = 0) -> bool:
     """Check if tactical reverse is needed."""
-    # Fast approach or danger zone with clear rear
-    if approach_rate < -10 and rear_clearance > REAR_CAUTION_DIST:
+    # Only reverse if CRITICAL distance or fast approach
+    # NOT in danger zone (35-45cm) - that should still crawl forward!
+    
+    # Fast approach with clear rear - pre-emptive reverse
+    if approach_rate < -15 and front_clearance < CAUTION_DIST and rear_clearance > REAR_CAUTION_DIST:
         return True
-    # Critical front distance with clear rear
-    if front_clearance < DANGER_DIST and rear_clearance > REAR_CAUTION_DIST:
+    
+    # CRITICAL front distance with clear rear - must reverse
+    if front_clearance < CRITICAL_DIST and rear_clearance > REAR_CAUTION_DIST:
         return True
+    
     return False
 
 

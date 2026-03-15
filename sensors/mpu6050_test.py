@@ -5,13 +5,13 @@ Uses I2C0: SDA=GP4, SCL=GP5
 Displays sensor data on OLED screen
 """
 
-import sys
-sys.path.insert(0, '/sensors')  # For mpremote run from root
-
 import machine
 import time
 import math
-import display
+try:
+    import display
+except ImportError:
+    display = None
 
 # ========== MPU-6050 Configuration ==========
 MPU6050_ADDR = 0x68      # Default I2C address
@@ -192,13 +192,12 @@ def main():
     print("Press Ctrl+C to stop")
     print("-" * 40)
     
-    # Initialize display
-    if display.display is None:
-        print("Error: OLED display not initialized!")
-        return
+    # Check if display is available
+    use_display = display is not None and hasattr(display, 'display') and display.display is not None
     
-    display.update_display(header="MPU6050 Init", text="Starting...")
-    time.sleep(1)
+    if use_display:
+        display.update_display(header="MPU6050 Init", text="Starting...")
+        time.sleep(1)
     
     # Initialize I2C
     print(f"\n[1] Initializing I2C on GP{SDA_PIN} (SDA) and GP{SCL_PIN} (SCL)...")
@@ -211,7 +210,8 @@ def main():
     
     if MPU6050_ADDR not in devices:
         print(f"   ERROR: MPU-6050 not found at 0x{MPU6050_ADDR:02X}")
-        display.update_display(header="MPU6050 Error", text="Not detected")
+        if use_display:
+            display.update_display(header="MPU6050 Error", text="Not detected")
         return
     
     # Initialize sensor
@@ -220,16 +220,18 @@ def main():
     
     if not sensor.init():
         print("   ERROR: Failed to initialize MPU-6050!")
-        display.update_display(header="MPU6050 Error", text="Init failed")
+        if use_display:
+            display.update_display(header="MPU6050 Error", text="Init failed")
         return
     
     # Check WHO_AM_I
     who_am_i = sensor._read_byte(WHO_AM_I)
-    print(f"   WHO_AM_I: 0x{who_am_i:02X} (MPU-6050 confirmed)")
+    print(f"   WHO_AM_I: 0x{who_am_i:02X} (MPU-6050)")
     
     print("\n[3] Streaming sensor data (5 per second)...")
-    display.update_display(header="MPU6050 Ready", text="Reading...")
-    time.sleep(1)
+    if use_display:
+        display.update_display(header="MPU6050 Ready", text="Reading...")
+        time.sleep(1)
     
     try:
         measurement_count = 0
@@ -246,20 +248,21 @@ def main():
             else:
                 display_text = "Read error"
             
-            # Update OLED display
-            display.update_display(
-                header="MPU6050 IMU",
-                text=display_text,
-                icon='robot'  # Optional icon
-            )
+            # Update OLED display (if available)
+            if use_display:
+                display.update_display(
+                    header="MPU6050 IMU",
+                    text=display_text,
+                    icon='robot'  # Optional icon
+                )
             
             # Print to console
             measurement_count += 1
             if ax is not None:
                 print(f"[{measurement_count:04d}] "
                       f"Accel: X={ax:+.3f}g Y={ay:+.3f}g Z={az:+.3f}g | "
-                      f"Gyro: X={gx:+.1f}°/s Y={gy:+.1f}°/s Z={gz:+.1f}°/s | "
-                      f"Pitch={pitch:+.1f}° Roll={roll:+.1f}° | {orientation}")
+                      f"Gyro: X={gx:+.1f}d/s Y={gy:+.1f}d/s Z={gz:+.1f}d/s | "
+                      f"Pitch={pitch:+.1f}deg Roll={roll:+.1f}deg | {orientation}")
             else:
                 print(f"[{measurement_count:04d}] Read error")
             
@@ -269,11 +272,13 @@ def main():
     except KeyboardInterrupt:
         print("\n" + "-" * 40)
         print("Test stopped by user")
-        display.update_display(header="MPU6050", text="Test stopped")
-        time.sleep(1)
+        if use_display:
+            display.update_display(header="MPU6050", text="Test stopped")
+            time.sleep(1)
     except Exception as e:
         print(f"\nUnexpected error: {e}")
-        display.update_display(header="MPU6050 Error", text=str(e)[:20])
+        if use_display:
+            display.update_display(header="MPU6050 Error", text=str(e)[:20])
         time.sleep(2)
 
 

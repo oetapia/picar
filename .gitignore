@@ -1,6 +1,7 @@
 #config - contains sensitive IPs and passwords
 config.py
 source/
+secrets.py
 
 #venv
 venv/

@@ -12,6 +12,7 @@ import lights
 from sensors import accelerometer
 from sensors import dual_tof
 from sensors import hcsr04
+from sensors import proximity_guard
 
 # ========== LED ==========
 led = machine.Pin("LED", machine.Pin.OUT)
@@ -315,6 +316,20 @@ def api_lights_control(request, status):
     
     return create_cors_response(response_data)
 
+@app.route('/api/proximity_guard')
+def api_proximity_guard(request):
+    """Get proximity guard status (Pico-side emergency stop)."""
+    state = proximity_guard.get_state()
+    response_data = {
+        'success': True,
+        'enabled': state['enabled'],
+        'interventions': state['interventions'],
+        'last_front_cm': state['last_front_cm'],
+        'last_rear_cm': state['last_rear_cm'],
+        'message': f'Guard: {"ON" if state["enabled"] else "OFF"} | Stops: {state["interventions"]}'
+    }
+    return create_cors_response(response_data)
+
 @app.route('/api/test')
 def api_test(request):
     response_data = {'success': True, 'message': 'CORS is working!', 'timestamp': time.time()}
@@ -333,6 +348,7 @@ async def start_server():
     asyncio.create_task(accelerometer.monitor())
     asyncio.create_task(dual_tof.monitor())
     asyncio.create_task(hcsr04.monitor())
+    asyncio.create_task(proximity_guard.monitor())
     asyncio.create_task(_idle_watcher())
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)

@@ -171,12 +171,18 @@ VEHICLE = VehicleModel()
 # ═══════════════════════════════════════════════════════════════════
 
 # Speed settings (motor %)
-CRUISE_SPEED = 35
-MEDIUM_SPEED = 25
-SLOW_SPEED = 18
-CRAWL_SPEED = 12
-REVERSE_FAST = -35
-REVERSE_SLOW = -22
+# ⚠️  Motor dead zone: below ~35% PWM the motor stalls (insufficient torque).
+# All speeds MUST be ≥ 35 for forward, ≤ -35 for reverse.
+MOTOR_DEADZONE = 35               # minimum motor % that actually moves
+CRUISE_SPEED   = 55               # comfortable cruising
+CAUTIOUS_SPEED = 42               # slowing down, still responsive
+MINIMUM_SPEED  = 35               # barely moves — crawl / obstacle proximity
+# Legacy aliases (so FSM state names still map cleanly)
+MEDIUM_SPEED = CAUTIOUS_SPEED
+SLOW_SPEED   = MINIMUM_SPEED
+CRAWL_SPEED  = MINIMUM_SPEED
+REVERSE_FAST = -50
+REVERSE_SLOW = -38
 
 # Steering angles
 STEER_LEFT = 35
@@ -645,9 +651,9 @@ def execute_reverse(client: PicarClient,
         client.stop()
         return
     
-    # Reduce speed if rear is getting close
+    # Reduce speed if rear is getting close (but stay above dead zone)
     if rear_dist < REAR_CAUTION_DIST:
-        speed = min(speed, -18)
+        speed = max(speed, -MOTOR_DEADZONE)  # clamp to minimum moving speed
     
     servo, _ = calculate_reverse_steering(left_dist, right_dist)
     client.set_servo(servo)

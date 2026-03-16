@@ -59,7 +59,9 @@ class NavigationState(Enum):
 
 
 # ── Valid transitions (AUTOSAR-style) ────────────────────────────
-# If a transition is not listed here it will be rejected and logged.
+# Motor dead zone: below 35% the motor stalls.  So SLOW and CRAWL are
+# both 35% — effectively the same physical speed.  The transition table
+# is therefore more relaxed for forward speeds (3 effective zones).
 VALID_TRANSITIONS: Dict[NavigationState, Set[NavigationState]] = {
     NavigationState.STOPPED: {
         NavigationState.CRUISE, NavigationState.MEDIUM,
@@ -67,24 +69,25 @@ VALID_TRANSITIONS: Dict[NavigationState, Set[NavigationState]] = {
         NavigationState.EMERGENCY_STOP, NavigationState.TACTICAL_REVERSE,
     },
     NavigationState.CRUISE: {
-        NavigationState.MEDIUM, NavigationState.SLOW,
+        NavigationState.MEDIUM, NavigationState.SLOW, NavigationState.CRAWL,
         NavigationState.EMERGENCY_STOP, NavigationState.STOPPED,
     },
     NavigationState.MEDIUM: {
-        NavigationState.CRUISE, NavigationState.SLOW,
-        NavigationState.CRAWL, NavigationState.EMERGENCY_STOP,
-        NavigationState.STOPPED,
+        NavigationState.CRUISE, NavigationState.SLOW, NavigationState.CRAWL,
+        NavigationState.EMERGENCY_STOP, NavigationState.STOPPED,
     },
     NavigationState.SLOW: {
-        NavigationState.MEDIUM, NavigationState.CRAWL,
+        NavigationState.CRUISE, NavigationState.MEDIUM, NavigationState.CRAWL,
+        NavigationState.TACTICAL_REVERSE,
         NavigationState.EMERGENCY_STOP, NavigationState.STOPPED,
     },
     NavigationState.CRAWL: {
-        NavigationState.SLOW, NavigationState.TACTICAL_REVERSE,
+        NavigationState.CRUISE, NavigationState.MEDIUM, NavigationState.SLOW,
+        NavigationState.TACTICAL_REVERSE,
         NavigationState.EMERGENCY_STOP, NavigationState.STOPPED,
     },
     NavigationState.TACTICAL_REVERSE: {
-        NavigationState.CRAWL, NavigationState.STOPPED,
+        NavigationState.CRAWL, NavigationState.SLOW, NavigationState.STOPPED,
         NavigationState.EMERGENCY_STOP, NavigationState.TRAPPED,
     },
     NavigationState.EMERGENCY_STOP: {
@@ -92,7 +95,7 @@ VALID_TRANSITIONS: Dict[NavigationState, Set[NavigationState]] = {
         NavigationState.TRAPPED,
     },
     NavigationState.RECOVERY: {
-        NavigationState.STOPPED, NavigationState.CRAWL,
+        NavigationState.STOPPED, NavigationState.CRAWL, NavigationState.SLOW,
         NavigationState.EMERGENCY_STOP, NavigationState.TRAPPED,
     },
     NavigationState.TRAPPED: {

@@ -22,14 +22,20 @@ All safety thresholds are **derived from real measurements** — not magic numbe
 | **Speed @ 100% motor** | 68.3 cm/s | 3 m in 4.39 s |
 | **Speed @ 50% motor** | 54.7 cm/s | 3 m in 5.48 s |
 
-### Speed Curve (interpolated via `motor.py` sqrt mapping)
+### Motor Dead Zone (Critical Constraint)
+
+⚠️ **Below ~35% motor PWM, the motor stalls** — insufficient torque to turn the wheels. All autonomous speeds must be ≥ 35%.
+
+### Speed Zones (3 effective speeds)
 
 | Motor % | Speed (cm/s) | FSM State | Stop Distance |
 |---------|-------------|-----------|---------------|
-| 35% | ~47 | CRUISE | ~17 cm |
-| 25% | ~38 | MEDIUM | ~12 cm |
-| 18% | ~30 | SLOW | ~9 cm |
-| 12% | ~22 | CRAWL | ~6 cm |
+| 55% | ~50 | CRUISE | ~20 cm |
+| 42% | ~44 | MEDIUM (CAUTIOUS) | ~17 cm |
+| 35% | ~40 | SLOW / CRAWL (MIN) | ~15 cm |
+| -38% | ~42 | REVERSE | ~16 cm |
+
+Note: SLOW and CRAWL are both 35% — the minimum that reliably moves.
 
 ### Stopping Distance Formula
 
@@ -159,6 +165,33 @@ If no sensor data for **250 ms** → automatic emergency stop.
 
 All shared state (`_current_direction`, `_current_motor_pct`, etc.) is protected by a `threading.Lock`.
 
+### 🛡️ Pico-Side Proximity Guard (Zero-Latency Safety Net)
+
+**Problem:** The client-side FSM runs over WiFi. Sensor → HTTP → WiFi → Client → Decision → WiFi → HTTP → Motor = **200–400 ms** round trip. At 50 cm/s that's 10–20 cm of travel — potentially a collision.
+
+**Solution:** `sensors/proximity_guard.py` runs directly on the Pico W alongside the sensor monitors:
+
+```
+Sensor cache → Guard check → Motor GPIO cutoff  ≈ 1–5 ms
+```
+
+| | Client FSM (WiFi) | Proximity Guard (Pico) |
+|-|-------------------|----------------------|
+| **Latency** | 200–400 ms | 1–5 ms |
+| **Intelligence** | Full FSM, TTC, hysteresis | Simple threshold |
+| **Front threshold** | Dynamic (physics-based) | Fixed 15 cm |
+| **Rear threshold** | Dynamic | Fixed 12 cm |
+| **Action** | Speed zones, steering | Motor kill only |
+| **Purpose** | Navigation | Safety net |
+
+The guard:
+- Reads from existing sensor caches (no extra I2C traffic)
+- Only intervenes when motor is active AND obstacle too close
+- Has a 500 ms cooldown to prevent oscillation
+- Logs every intervention for debugging
+- Exposes state via `/api/proximity_guard` endpoint
+- Can be disabled for calibration: `proximity_guard.set_enabled(False)`
+
 ---
 
 ## 🎯 State Machine
@@ -186,14 +219,17 @@ All shared state (`_current_direction`, `_current_motor_pct`, etc.) is protected
 | State | Speed | Conditions |
 |-------|-------|------------|
 | **STOPPED** | 0% | Initial state / gap too narrow |
-| **CRUISE** | 35% ≈ 47 cm/s | Front > 95 cm (enter) / 85 cm (stay) |
-| **MEDIUM** | 25% ≈ 38 cm/s | Front > 70 cm (enter) / 60 cm (stay) |
-| **SLOW** | 18% ≈ 30 cm/s | Front > 40 cm (enter) / 30 cm (stay) |
-| **CRAWL** | 12% ≈ 22 cm/s | Front > 25 cm (enter) / 15 cm (stay) |
-| **TACTICAL_REVERSE** | -22% | Front critical, rear clear |
+| **CRUISE** | 55% ≈ 50 cm/s | Front > 95 cm (enter) / 85 cm (stay) |
+| **MEDIUM** | 42% ≈ 44 cm/s | Front > 70 cm (enter) / 60 cm (stay) |
+| **SLOW** | 35% ≈ 40 cm/s | Front > 40 cm (enter) / 30 cm (stay) |
+| **CRAWL** | 35% ≈ 40 cm/s | Front > 25 cm (enter) / 15 cm (stay) |
+| **TACTICAL_REVERSE** | -38% | Front critical, rear clear |
 | **EMERGENCY_STOP** | 0% | TTC < 0.6s or front/rear below E-stop |
-| **RECOVERY** | ±12-22% | Clearing from emergency zone |
+| **RECOVERY** | ±35-38% | Clearing from emergency zone |
 | **TRAPPED** | 0% | No safe direction, watchdog timeout |
+
+> ⚠️ SLOW and CRAWL are physically identical (35%) due to motor dead zone.
+> They exist as separate states for future hardware with finer speed control.
 
 ---
 
@@ -207,6 +243,14 @@ client/
 ├── perception.py            # Sensor fusion system
 ├── picar_client.py          # HTTP API client
 └── AUTONOMOUS_FSM_README.md # This file
+
+sensors/
+├── proximity_guard.py       # Pico-side emergency stop (zero WiFi latency)
+├── dual_tof.py              # Front ToF sensor monitors
+├── hcsr04.py                # Rear ultrasonic monitor
+└── accelerometer.py         # IMU monitor
+
+main.py                      # Pico server — starts all monitors + proximity guard
 ```
 
 ---
@@ -320,7 +364,14 @@ This means the decision tree tried to skip states — a sign that thresholds may
 
 ## 📝 Changelog
 
-### v2.0 — Industry-Hardened (Current)
+### v2.1 — Motor Dead Zone + Pico Safety Net (Current)
+- ✅ Motor dead zone fix: all speeds ≥ 35% (CRUISE=55, MEDIUM=42, SLOW/CRAWL=35)
+- ✅ `proximity_guard.py` — Pico-side emergency stop (~1 ms, zero WiFi latency)
+- ✅ Guard integrated in `main.py` as async task + `/api/proximity_guard` endpoint
+- ✅ Relaxed transition table for 3 effective speed zones
+- ✅ Reverse speed raised to -38% (above dead zone)
+
+### v2.0 — Industry-Hardened
 - ✅ `VehicleModel` with measured dimensions and speed calibration
 - ✅ Physics-derived distance thresholds (replacing magic numbers)
 - ✅ Time-to-Collision (TTC) emergency and pre-brake

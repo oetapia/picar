@@ -36,6 +36,7 @@ class PicoDeployer:
         'motor.py',
         'servo.py',
         'display.py',
+        'config.py',
         'lights.py',
         'icons.py',
         'icons.json',

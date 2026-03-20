@@ -95,10 +95,68 @@ def api_motor(request, speed):
             'motor_speed': motor.current_motor_speed,
             'message': f'Motor speed: {motor.current_motor_speed}'
         }
+        # Include per-motor state if dual motor module is loaded
+        if hasattr(motor, 'get_motor_state'):
+            response_data.update(motor.get_motor_state())
         print(f"Motor speed set to {motor.current_motor_speed}")
     except Exception as e:
         response_data = {'success': False, 'message': f'Motor error: {e}'}
         print(f"Motor error: {e}")
+    finally:
+        led.off()
+    return create_cors_response(response_data)
+
+@app.route('/api/motor/<int:speed_a>/<int:speed_b>')
+def api_motor_differential(request, speed_a, speed_b):
+    """Set individual motor speeds for differential/tank control."""
+    led.on()
+    try:
+        if not hasattr(motor, 'set_motor_speeds'):
+            led.off()
+            return create_cors_response({
+                'success': False,
+                'message': 'Differential control requires motor2 module'
+            }, status_code=400)
+        speed_a = max(-100, min(100, speed_a))
+        speed_b = max(-100, min(100, speed_b))
+        motor.set_motor_speeds(a=speed_a, b=speed_b)
+        _on_command(request, f"A:{speed_a} B:{speed_b}")
+        response_data = {
+            'success': True,
+            'message': f'Motors: A={speed_a} B={speed_b}'
+        }
+        response_data.update(motor.get_motor_state())
+        print(f"Differential motor: A={speed_a} B={speed_b}")
+    except Exception as e:
+        response_data = {'success': False, 'message': f'Motor error: {e}'}
+        print(f"Motor error: {e}")
+    finally:
+        led.off()
+    return create_cors_response(response_data)
+
+@app.route('/api/motor/trim/<int:a_bias>/<int:b_bias>')
+def api_motor_trim(request, a_bias, b_bias):
+    """Set per-motor bias trim to compensate for motor mismatch."""
+    led.on()
+    try:
+        if not hasattr(motor, 'set_trim'):
+            led.off()
+            return create_cors_response({
+                'success': False,
+                'message': 'Trim control requires motor2 module'
+            }, status_code=400)
+        motor.set_trim(a_bias=a_bias, b_bias=b_bias)
+        _on_command(request, f"Trim A:{motor.motor_a_bias} B:{motor.motor_b_bias}")
+        response_data = {
+            'success': True,
+            'motor_a_bias': motor.motor_a_bias,
+            'motor_b_bias': motor.motor_b_bias,
+            'message': f'Trim: A={motor.motor_a_bias} B={motor.motor_b_bias}'
+        }
+        print(f"Motor trim: A={motor.motor_a_bias} B={motor.motor_b_bias}")
+    except Exception as e:
+        response_data = {'success': False, 'message': f'Trim error: {e}'}
+        print(f"Trim error: {e}")
     finally:
         led.off()
     return create_cors_response(response_data)
@@ -160,6 +218,9 @@ def api_status(request):
         'servo_angle': servo.current_angle + 90,
         'message': f'Motor: {motor.current_motor_speed}, Servo: {servo.current_angle + 90}°'
     }
+    # Include per-motor state if dual motor module is loaded
+    if hasattr(motor, 'get_motor_state'):
+        response_data['motors'] = motor.get_motor_state()
     return create_cors_response(response_data)
 
 @app.route('/api/accelerometer')

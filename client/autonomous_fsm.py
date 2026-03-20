@@ -250,7 +250,32 @@ class AutonomousFSM:
                 # ── State-timeout watchdog ────────────────────────
                 self._check_state_timeout()
 
-                # ═══ PRIORITY 0: TTC EMERGENCY (physics-based) ═══
+                # ═══ PRIORITY 0a: TERRAIN SAFETY (incline / tilt) ═══
+                if hooks.check_lateral_tilt_danger(perception_state):
+                    log.warning("LATERAL TILT DANGER — roll=%.0f° — emergency stop",
+                                perception_state.terrain_roll)
+                    hooks.execute_stop(self.client)
+                    with self._lock:
+                        self._current_direction = "stopped"
+                        self._current_motor_pct = 0
+                    self._transition_to(NavigationState.EMERGENCY_STOP)
+                    self._update_display_throttled_perception(perception_state)
+                    self._maintain_poll_rate(loop_start)
+                    continue
+
+                if hooks.check_steep_incline(perception_state):
+                    log.warning("STEEP INCLINE — pitch=%.0f° — stopping",
+                                perception_state.terrain_incline)
+                    hooks.execute_stop(self.client)
+                    with self._lock:
+                        self._current_direction = "stopped"
+                        self._current_motor_pct = 0
+                    self._transition_to(NavigationState.STOPPED)
+                    self._update_display_throttled_perception(perception_state)
+                    self._maintain_poll_rate(loop_start)
+                    continue
+
+                # ═══ PRIORITY 0b: TTC EMERGENCY (physics-based) ═══
                 motor_pct = STATE_SPEED.get(self.state, 0)
                 if self._current_direction == "forward" and hooks.check_ttc_emergency(perception_state, motor_pct):
                     log.warning("TTC < %.1fs — emergency stop  front=%.0fcm",
@@ -531,9 +556,11 @@ class AutonomousFSM:
 
     def _handle_forward_perception(self, state, left: float, right: float,
                                    target_speed: int, mode: str):
-        """Handle forward movement with acceleration smoothing and speed-dependent steering."""
+        """Handle forward movement with acceleration smoothing, speed-dependent steering, and terrain compensation."""
         # Smooth speed ramp
         smoothed = hooks.smooth_speed(self._current_motor_pct, target_speed)
+        # Terrain-aware speed adjustment (uphill boost / downhill reduction)
+        smoothed = hooks.adjust_speed_for_terrain(smoothed, state)
         # Speed-dependent steering
         servo, steer_label = hooks.calculate_steering_with_speed(left, right, smoothed)
         self.client.set_servo(servo)
@@ -541,7 +568,10 @@ class AutonomousFSM:
         with self._lock:
             self._current_direction = "forward"
             self._current_motor_pct = smoothed
+        terrain_tag = hooks.format_terrain_status(state)
         status = hooks.format_console_status(mode, steer_label, left, right, smoothed)
+        if terrain_tag:
+            status += f" {terrain_tag}"
         print(f"\r{status}", end="", flush=True)
 
     def _handle_reverse_perception(self, state, left: float, right: float):
@@ -656,6 +686,11 @@ class AutonomousFSM:
             if high_conf > 0:
                 display_text += f"\nConf:{high_conf}"
             
+            # Add terrain info when on a slope
+            terrain_tag = hooks.format_terrain_status(state)
+            if terrain_tag:
+                display_text += f"\n{terrain_tag}"
+            
             hooks.update_display(self.client, display_text)
     
     def _maintain_poll_rate(self, loop_start: float):
@@ -708,6 +743,9 @@ def main():
     print("  ✓ Sensor staleness detection & state watchdog")
     print("  ✓ Thread-safe shared state (Lock)")
     print("  ✓ Sensor fusion + IMU + obstacle tracking")
+    print(f"  ✓ Terrain-aware speed (uphill boost ≤{hooks.MAX_INCLINE_BOOST}%, "
+          f"steep limit {hooks.STEEP_INCLINE_LIMIT:.0f}°, "
+          f"tilt limit {hooks.LATERAL_TILT_LIMIT:.0f}°)")
     print()
     
     logging.basicConfig(

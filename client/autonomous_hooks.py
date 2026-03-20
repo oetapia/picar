@@ -245,6 +245,15 @@ STATE_TIMEOUT = {
 # ── Acceleration smoothing ───────────────────────────────────────
 MAX_SPEED_STEP = 5   # max motor-% change per control loop iteration
 
+# ── Terrain / incline parameters ─────────────────────────────────
+# Physics: on a slope of angle θ the gravitational pull-back is m·g·sin(θ).
+# We translate that into a motor-% boost so the car maintains forward speed.
+INCLINE_THRESHOLD   = 5.0    # degrees — below this, terrain is "flat"
+STEEP_INCLINE_LIMIT = 35.0   # degrees — above this, refuse to climb (safety)
+MAX_INCLINE_BOOST   = 15     # motor-%  — maximum uphill speed boost
+DOWNHILL_REDUCTION  = 10     # motor-%  — maximum downhill speed cut
+LATERAL_TILT_LIMIT  = 25.0   # degrees — lateral roll beyond which we stop (tip-over risk)
+
 
 # ═══════════════════════════════════════════════════════════════════
 # PERCEPTION SYSTEM SINGLETON
@@ -876,6 +885,124 @@ def smooth_speed(current_motor: int, target_motor: int) -> int:
     if current_motor == 0 and target_motor < 0:
         return min(next_speed, -MOTOR_DEADZONE)
     return next_speed
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TERRAIN / INCLINE-AWARE HOOKS
+# ═══════════════════════════════════════════════════════════════════
+
+def calculate_incline_speed_boost(pitch_deg: float, base_speed: int) -> int:
+    """
+    Calculate motor-% adjustment for terrain incline.
+
+    Physics: on a slope of angle θ, gravity pulls the car back with
+    force proportional to sin(θ).  We add a motor-% boost that
+    compensates for this gravitational drag so the car maintains
+    its intended speed.
+
+    On downhill slopes the boost is negative (reduce speed, gravity
+    already accelerates the car and braking distances increase).
+
+    Args:
+        pitch_deg: Pitch angle in degrees (positive = uphill).
+        base_speed: The flat-ground motor-% the navigation decided on.
+
+    Returns:
+        Signed motor-% delta to ADD to base_speed.
+        Positive = more power (uphill), negative = less power (downhill).
+    """
+    if abs(pitch_deg) < INCLINE_THRESHOLD:
+        return 0  # flat enough — no adjustment
+
+    # sin(θ) ranges 0..1; scale linearly into 0..MAX boost
+    sin_theta = math.sin(math.radians(min(abs(pitch_deg), 45.0)))
+
+    if pitch_deg > 0:
+        # ── Uphill: boost power ──────────────────────────────────
+        boost = int(round(sin_theta * MAX_INCLINE_BOOST))
+        # Never exceed 100 % total
+        max_allowed = 100 - base_speed
+        return min(boost, max_allowed)
+    else:
+        # ── Downhill: reduce power ───────────────────────────────
+        reduction = int(round(sin_theta * DOWNHILL_REDUCTION))
+        # Never drop below motor dead-zone (we still want to move)
+        max_reduction = base_speed - MOTOR_DEADZONE
+        return -min(reduction, max(0, max_reduction))
+
+
+def adjust_speed_for_terrain(base_speed: int,
+                             perception_state: PerceptionState) -> int:
+    """
+    Single entry-point: adjust motor speed for current terrain.
+
+    Combines incline boost/reduction with dead-zone clamping.
+    Safe to call even when IMU is unavailable (returns base_speed unchanged).
+
+    Args:
+        base_speed:        Motor-% decided by the navigation layer (positive = forward).
+        perception_state:  Current perception state (contains IMU data).
+
+    Returns:
+        Adjusted motor-% clamped to [MOTOR_DEADZONE .. 100].
+    """
+    incline = perception_state.terrain_incline  # 0 if IMU unavailable
+    if abs(incline) < INCLINE_THRESHOLD:
+        return base_speed  # flat — no change
+
+    delta = calculate_incline_speed_boost(incline, base_speed)
+    adjusted = base_speed + delta
+
+    # Clamp: never below dead-zone (stall), never above 100
+    adjusted = max(MOTOR_DEADZONE, min(100, adjusted))
+
+    if delta != 0:
+        log.info("Terrain adjust: incline=%+.0f° base=%d%% → %d%% (Δ%+d%%)",
+                 incline, base_speed, adjusted, delta)
+
+    return adjusted
+
+
+def check_steep_incline(perception_state: PerceptionState) -> bool:
+    """
+    Safety check: is the incline too steep to drive?
+
+    Returns True if the pitch exceeds STEEP_INCLINE_LIMIT — the
+    navigation layer should stop or switch to crawl.
+    """
+    return abs(perception_state.terrain_incline) >= STEEP_INCLINE_LIMIT
+
+
+def check_lateral_tilt_danger(perception_state: PerceptionState) -> bool:
+    """
+    Safety check: is the lateral tilt (roll) dangerously high?
+
+    Returns True if roll exceeds LATERAL_TILT_LIMIT — the car risks
+    tipping over and should stop immediately.
+    """
+    return abs(perception_state.terrain_roll) >= LATERAL_TILT_LIMIT
+
+
+def format_terrain_status(perception_state: PerceptionState) -> str:
+    """
+    Format a compact terrain status string for console / display.
+
+    Returns empty string when terrain is flat (no clutter).
+    """
+    incline = perception_state.terrain_incline
+    roll = perception_state.terrain_roll
+
+    if abs(incline) < INCLINE_THRESHOLD and abs(roll) < INCLINE_THRESHOLD:
+        return ""
+
+    parts = []
+    if abs(incline) >= INCLINE_THRESHOLD:
+        arrow = "⛰↑" if incline > 0 else "⛰↓"
+        parts.append(f"{arrow}{abs(incline):.0f}°")
+    if abs(roll) >= INCLINE_THRESHOLD:
+        parts.append(f"Roll:{roll:+.0f}°")
+
+    return " ".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════════

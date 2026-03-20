@@ -62,6 +62,39 @@ class IMUData:
         """Check if motors are currently running."""
         return self.motor_speed != 0
 
+    # ── Terrain / incline properties ─────────────────────────────
+    @property
+    def incline_angle(self) -> float:
+        """
+        Effective hill incline angle in degrees (signed).
+
+        Positive = uphill (front higher than rear, pitch > 0).
+        Negative = downhill (front lower than rear, pitch < 0).
+
+        Uses the pitch reading from the MPU-6050 accelerometer.
+        """
+        return self.pitch
+
+    @property
+    def is_uphill(self) -> bool:
+        """True when climbing a noticeable uphill slope (≥ 5°)."""
+        return self.pitch >= 5.0
+
+    @property
+    def is_downhill(self) -> bool:
+        """True when descending a noticeable downhill slope (≤ −5°)."""
+        return self.pitch <= -5.0
+
+    @property
+    def is_lateral_tilt(self) -> bool:
+        """True when the car has significant lateral (roll) tilt (≥ 10°)."""
+        return abs(self.roll) >= 10.0
+
+    @property
+    def is_on_slope(self) -> bool:
+        """True when on any noticeable slope (pitch or roll ≥ 5°)."""
+        return abs(self.pitch) >= 5.0 or abs(self.roll) >= 5.0
+
 
 @dataclass
 class Obstacle:
@@ -129,6 +162,32 @@ class PerceptionState:
         """Check if vehicle is moving (validated by IMU)."""
         if self.imu_data and self.imu_data.available:
             return self.imu_data.is_moving
+        return False
+
+    # ── Terrain / incline helpers ────────────────────────────────
+    @property
+    def terrain_incline(self) -> float:
+        """
+        Current terrain incline in degrees (signed).
+
+        Positive = uphill, negative = downhill, 0 = level or IMU unavailable.
+        """
+        if self.imu_data and self.imu_data.available:
+            return self.imu_data.incline_angle
+        return 0.0
+
+    @property
+    def terrain_roll(self) -> float:
+        """Current lateral tilt in degrees (0 if IMU unavailable)."""
+        if self.imu_data and self.imu_data.available:
+            return self.imu_data.roll
+        return 0.0
+
+    @property
+    def is_on_slope(self) -> bool:
+        """True when any significant slope is detected."""
+        if self.imu_data and self.imu_data.available:
+            return self.imu_data.is_on_slope
         return False
 
 
@@ -481,9 +540,13 @@ def format_perception_debug(state: PerceptionState) -> str:
     else:
         lines.append("Obstacles: None")
     
-    # IMU
+    # IMU + Terrain
     if state.imu_data and state.imu_data.available:
         lines.append(f"IMU: {state.imu_data.orientation} | Moving: {state.imu_data.is_moving}")
+        if state.is_on_slope:
+            incline = state.terrain_incline
+            slope_dir = "⛰ UP" if incline > 0 else "⛰ DN"
+            lines.append(f"Terrain: {slope_dir} {abs(incline):.0f}° Roll:{state.terrain_roll:+.0f}°")
     else:
         lines.append("IMU: Unavailable")
     

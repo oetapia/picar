@@ -121,6 +121,22 @@ class AutonomousDriver:
                     time.sleep(0.1)
                     continue
                 
+                # Terrain safety checks (steep incline / tip-over risk)
+                if hooks.check_lateral_tilt_danger(perception_state):
+                    print(f"\r🚨 TILT DANGER! Roll:{perception_state.terrain_roll:.0f}° — STOP")
+                    hooks.execute_stop(self.client)
+                    self._emergency_stop_active = True
+                    self._current_direction = "stopped"
+                    time.sleep(0.1)
+                    continue
+
+                if hooks.check_steep_incline(perception_state):
+                    print(f"\r🚨 STEEP INCLINE! Pitch:{perception_state.terrain_incline:.0f}° — STOP")
+                    hooks.execute_stop(self.client)
+                    self._current_direction = "stopped"
+                    time.sleep(0.1)
+                    continue
+
                 # Predictive braking (perception-aware with velocity)
                 if hooks.check_pre_brake_perception(perception_state, self._current_direction):
                     approaching_obs = [o for o in perception_state.obstacles if o.velocity and o.velocity < -hooks.APPROACH_RATE_THRESHOLD]
@@ -182,20 +198,20 @@ class AutonomousDriver:
         
         # DECISION TREE (using perception-aware hooks)
         if hooks.should_cruise_forward_perception(state):
-            self._move_forward(left, right, hooks.CRUISE_SPEED, "CRUISE")
+            self._move_forward(left, right, hooks.CRUISE_SPEED, "CRUISE", state)
         
         elif hooks.should_medium_forward_perception(state):
-            self._move_forward(left, right, hooks.MEDIUM_SPEED, "MEDIUM")
+            self._move_forward(left, right, hooks.MEDIUM_SPEED, "MEDIUM", state)
         
         elif hooks.should_slow_forward_perception(state):
-            self._move_forward(left, right, hooks.SLOW_SPEED, "SLOW")
+            self._move_forward(left, right, hooks.SLOW_SPEED, "SLOW", state)
         
         elif hooks.should_crawl_forward_perception(state):
             # Check if should reverse instead (perception-aware)
             if hooks.should_tactical_reverse_perception(state):
                 self._move_backward(left, right, rear_clearance, hooks.REVERSE_SLOW)
             else:
-                self._move_forward(left, right, hooks.CRAWL_SPEED, "CRAWL")
+                self._move_forward(left, right, hooks.CRAWL_SPEED, "CRAWL", state)
         
         elif hooks.should_emergency_reverse(front_clearance, rear_clearance):
             self._move_backward(left, right, rear_clearance, hooks.REVERSE_SLOW)
@@ -207,16 +223,25 @@ class AutonomousDriver:
                 self._current_direction = "stopped"
                 print(f"\r⚠️ No safe path: F:{front_clearance:.0f}cm R:{rear_clearance:.0f}cm")
 
-    def _move_forward(self, left: float, right: float, speed: int, mode: str):
-        """Execute forward movement using hooks."""
+    def _move_forward(self, left: float, right: float, speed: int, mode: str,
+                      perception_state=None):
+        """Execute forward movement using hooks with terrain compensation."""
         if self._emergency_stop_active:
             return
+        
+        # Terrain-aware speed adjustment (uphill boost / downhill reduction)
+        if perception_state is not None:
+            speed = hooks.adjust_speed_for_terrain(speed, perception_state)
         
         hooks.execute_forward(self.client, speed, left, right)
         self._current_direction = "forward"
         
         servo, steer_label = hooks.calculate_steering(left, right)
         status = hooks.format_console_status(mode, steer_label, left, right, speed)
+        if perception_state is not None:
+            terrain_tag = hooks.format_terrain_status(perception_state)
+            if terrain_tag:
+                status += f" {terrain_tag}"
         print(f"\r{status}", end="")
 
     def _move_backward(self, left: float, right: float, rear: float, speed: int):
@@ -263,6 +288,11 @@ class AutonomousDriver:
         if high_conf > 0:
             display_text += f"\nConf:{high_conf}"
         
+        # Add terrain info when on a slope
+        terrain_tag = hooks.format_terrain_status(state)
+        if terrain_tag:
+            display_text += f"\n{terrain_tag}"
+        
         hooks.update_display(self.client, display_text)
 
 
@@ -292,6 +322,9 @@ def main():
     print("  ✓ IMU-validated motion detection")
     print("  ✓ Obstacle tracking with velocity")
     print("  ✓ Predictive collision avoidance")
+    print(f"  ✓ Terrain-aware speed (uphill boost ≤{hooks.MAX_INCLINE_BOOST}%, "
+          f"steep limit {hooks.STEEP_INCLINE_LIMIT:.0f}°, "
+          f"tilt limit {hooks.LATERAL_TILT_LIMIT:.0f}°)")
     print()
 
     fd = sys.stdin.fileno()

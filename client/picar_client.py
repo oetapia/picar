@@ -188,6 +188,64 @@ class PicarClient:
         
         return sensors
 
+    # ========== Data Logger ==========
+    def log_start(self, interval_ms: int = None, max_samples: int = None) -> dict:
+        """
+        Start recording sensor data on the Pico for offline modeling.
+        
+        Args:
+            interval_ms: Sampling interval (default 100 = 10 Hz)
+            max_samples: Max samples before auto-stop (default 1000)
+        
+        Returns:
+            dict with success status and recording parameters
+        """
+        body = {}
+        if interval_ms is not None:
+            body['interval_ms'] = interval_ms
+        if max_samples is not None:
+            body['max_samples'] = max_samples
+        return self._post("/api/log/start", body)
+
+    def log_stop(self) -> dict:
+        """Stop recording and flush to Pico flash storage."""
+        return self._post("/api/log/stop", {})
+
+    def log_status(self) -> dict:
+        """
+        Get logger status.
+        
+        Returns:
+            dict with 'recording' (bool), 'sample_count' (int),
+            'file_ready' (bool), and timing info if recording
+        """
+        return self._get("/api/log/status")
+
+    def log_download(self, save_path: str = None) -> dict:
+        """
+        Download the sensor log from Pico (auto-erases on Pico after download).
+        
+        Args:
+            save_path: If provided, save the JSON to this file path.
+                       If None, returns the data dict directly.
+        
+        Returns:
+            dict with the full log profile data
+        """
+        import json as _json
+        data = self._get("/api/log/download")
+        if data.get('success') and save_path:
+            with open(save_path, 'w') as f:
+                _json.dump(data, f, indent=2)
+            print(f"✓ Log saved to {save_path} ({data.get('sample_count', '?')} samples)")
+        return data
+
+    def log_clear(self) -> dict:
+        """Erase stored log on Pico without downloading."""
+        response = self.session.delete(f"{self.base_url}/api/log/clear", timeout=5)
+        response.raise_for_status()
+        return response.json()
+
     # ========== Convenience Methods ==========
     def stop(self) -> dict:
         """Stop the motor immediately and turn off lights if auto mode."""

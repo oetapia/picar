@@ -772,8 +772,8 @@ def should_tactical_reverse(front_clearance: float,
 
 def should_emergency_reverse(front_clearance: float,
                             rear_clearance: float) -> bool:
-    """Check if emergency reverse is needed."""
-    return (front_clearance < CRITICAL_DIST and 
+    """Check if emergency reverse is needed — can't enter CRAWL, must back up."""
+    return (front_clearance < CRAWL_ENTER and
             rear_clearance > REAR_DANGER_DIST)
 
 

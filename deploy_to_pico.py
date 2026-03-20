@@ -34,6 +34,7 @@ class PicoDeployer:
         'main.py',
         'wifi.py',
         'motor.py',
+        'motor2.py',
         'servo.py',
         'display.py',
         'config.py',

@@ -19,8 +19,10 @@ Industry references:
 - AUTOSAR — explicit state transitions with validation
 """
 
+import json
 import math
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Tuple, Optional, Dict, List
 from picar_client import PicarClient
@@ -40,7 +42,55 @@ if not log.handlers:
     log.setLevel(logging.INFO)
 
 # ═══════════════════════════════════════════════════════════════════
-# VEHICLE PHYSICS MODEL (measured)
+# VEHICLE PROFILE LOADING
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Active profile ───────────────────────────────────────────────
+# Change this string to switch between motor configurations:
+#   "single_motor"  — original fast single-motor (motor.py)
+#   "dual_motor"    — slower dual-motor setup (motor2.py)
+ACTIVE_PROFILE = "dual_motor"
+
+_PROFILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "vehicle_profiles.json")
+
+
+def load_vehicle_profile(profile_name: str = ACTIVE_PROFILE) -> dict:
+    """
+    Load a vehicle profile from vehicle_profiles.json.
+
+    Args:
+        profile_name: Key in the JSON file (e.g. "single_motor", "dual_motor").
+
+    Returns:
+        Profile dict with dimensions, speed_calibration, motor, physics, terrain.
+
+    Raises:
+        FileNotFoundError: If vehicle_profiles.json is missing.
+        KeyError: If the requested profile doesn't exist.
+    """
+    with open(_PROFILES_PATH, "r") as f:
+        profiles = json.load(f)
+
+    if profile_name not in profiles:
+        available = ", ".join(profiles.keys())
+        raise KeyError(
+            f"Vehicle profile '{profile_name}' not found. "
+            f"Available profiles: {available}"
+        )
+
+    profile = profiles[profile_name]
+    log.info("Loaded vehicle profile: %s — %s",
+             profile_name, profile.get("description", ""))
+    return profile
+
+
+# Load the active profile at module import time
+_PROFILE = load_vehicle_profile()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VEHICLE PHYSICS MODEL (loaded from profile)
 # ═══════════════════════════════════════════════════════════════════
 
 @dataclass(frozen=True)
@@ -48,14 +98,12 @@ class VehicleModel:
     """
     Physics model derived from real measurements.
 
-    Measurements taken:
-        100 % motor → 3 m in 4.39 s  →  68.3 cm/s
-         50 % motor → 3 m in 5.48 s  →  54.7 cm/s
+    All parameters are loaded from vehicle_profiles.json so different
+    motor configurations (single vs dual motor) can be swapped by
+    changing ACTIVE_PROFILE.
 
-    Dimensions (cm):
-        length=34  body_width=14  overall_width=16  height=24
-
-    ToF sensors are mounted 11 cm apart at the front.
+    The sqrt speed mapping from motor.py / motor2.py is used to
+    interpolate between the two measured calibration points.
     """
 
     # ── Dimensions (cm) ──────────────────────────────────────────
@@ -66,12 +114,19 @@ class VehicleModel:
     wheelbase: float = 22.0              # estimated
     tof_spacing: float = 11.0            # sensor-to-sensor
 
+    # ── Motor dead zone (minimum % that moves) ───────────────────
+    motor_dead_zone: int = 5
+
+    # ── PWM formula cutoff ───────────────────────────────────────
+    # Both motor.py and motor2.py use normalised = sqrt((pct - 5) / 95)
+    # This is the zero-point of the PWM curve, NOT the dead zone.
+    _pwm_cutoff: int = 5
+
     # ── Measured speed calibration ───────────────────────────────
-    # motor% → cm/s  (two real data-points; rest interpolated via
-    # the sqrt mapping in motor.py)
+    # motor% → cm/s  (two real data-points; rest interpolated)
     _speed_cal: Dict[int, float] = field(default_factory=lambda: {
-        100: 68.3,
-        50: 54.7,
+        100: 11.1,
+        50: 9.4,
     })
 
     # ── Timing budget (seconds) ──────────────────────────────────
@@ -81,14 +136,14 @@ class VehicleModel:
     safety_factor: float = 1.3           # ISO 26262 recommended margin
 
     # ── Braking estimate ─────────────────────────────────────────
-    deceleration_cmss: float = 150.0     # rough coast-to-stop
+    deceleration_cmss: float = 200.0     # rough coast-to-stop
 
     # ── Safety margins ───────────────────────────────────────────
     side_margin_cm: float = 5.0          # clearance per side
     front_margin_cm: float = 5.0         # extra buffer after braking
 
     # ── Hysteresis band ──────────────────────────────────────────
-    hysteresis_cm: float = 5.0           # enter/exit offset
+    hysteresis_cm: float = 3.0           # enter/exit offset
 
     # ── Helpers ──────────────────────────────────────────────────
     @property
@@ -96,23 +151,33 @@ class VehicleModel:
         """Total worst-case reaction time."""
         return (self.sensor_poll_s + self.network_rtt_s + self.motor_lag_s) * self.safety_factor
 
+    @property
+    def _k_speed(self) -> float:
+        """Speed constant derived from 100% calibration point."""
+        return self._speed_cal.get(100, 11.1)
+
     def speed_at(self, motor_pct: int) -> float:
         """
         Estimate true speed (cm/s) for a motor percentage.
 
-        Uses the sqrt mapping from motor.py to interpolate between
-        the two measured calibration points.
+        Uses the sqrt mapping from motor.py / motor2.py to interpolate
+        between the measured calibration points.
+
+        Note: The PWM cutoff (5%) is used for interpolation — this matches
+        the hardware formula in both motor.py and motor2.py:
+            normalised = sqrt((pct - 5) / 95)
+        The dead zone (motor_dead_zone) is a *separate* concept: the minimum
+        motor-% that actually produces movement, used by the navigation layer.
         """
         if motor_pct in self._speed_cal:
             return self._speed_cal[motor_pct]
-        if motor_pct <= 5:
+        if motor_pct <= self._pwm_cutoff:
             return 0.0
-        # motor.py: normalised = sqrt((pct - 5) / 95)
-        # We know v(100)=68.3 and v(50)=54.7.  Fit  v = k·sqrt((pct-5)/95)
-        # k = 68.3 / sqrt(95/95) = 68.3
-        k = 68.3  # from 100 % data-point
-        norm = math.sqrt(max(0, (motor_pct - 5) / 95.0))
-        return k * norm
+        # motor.py / motor2.py: normalised = sqrt((pct - 5) / 95)
+        # k = speed_at_100% / sqrt((100-5)/95) = speed_at_100%
+        norm = math.sqrt(max(0, (motor_pct - self._pwm_cutoff)
+                                / max(1, 100.0 - self._pwm_cutoff)))
+        return self._k_speed * norm
 
     def stopping_distance(self, motor_pct: int) -> float:
         """
@@ -162,29 +227,58 @@ class VehicleModel:
         return base_cm - self.hysteresis_cm
 
 
-# Singleton vehicle model
-VEHICLE = VehicleModel()
+def _build_vehicle_model(profile: dict) -> VehicleModel:
+    """Construct a VehicleModel from a loaded profile dict."""
+    dims = profile.get("dimensions", {})
+    cal = profile.get("speed_calibration", {})
+    phys = profile.get("physics", {})
+    motor = profile.get("motor", {})
+
+    speed_cal = {int(k): float(v) for k, v in cal.items()}
+
+    return VehicleModel(
+        length=dims.get("length", 34.0),
+        body_width=dims.get("body_width", 14.0),
+        overall_width=dims.get("overall_width", 16.0),
+        height=dims.get("height", 24.0),
+        wheelbase=dims.get("wheelbase", 22.0),
+        tof_spacing=dims.get("tof_spacing", 11.0),
+        motor_dead_zone=motor.get("dead_zone", 5),
+        _speed_cal=speed_cal,
+        sensor_poll_s=phys.get("sensor_poll_s", 0.05),
+        network_rtt_s=phys.get("network_rtt_s", 0.10),
+        motor_lag_s=phys.get("motor_lag_s", 0.05),
+        safety_factor=phys.get("safety_factor", 1.3),
+        deceleration_cmss=phys.get("deceleration_cmss", 200.0),
+        side_margin_cm=phys.get("side_margin_cm", 5.0),
+        front_margin_cm=phys.get("front_margin_cm", 5.0),
+        hysteresis_cm=phys.get("hysteresis_cm", 3.0),
+    )
+
+
+# Singleton vehicle model (built from active profile)
+VEHICLE = _build_vehicle_model(_PROFILE)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# CONSTANTS - Navigation Parameters (physics-derived where possible)
+# CONSTANTS — loaded from active profile (physics-derived where possible)
 # ═══════════════════════════════════════════════════════════════════
 
-# Speed settings (motor %)
-# ⚠️  Motor dead zone: below ~35% PWM the motor stalls (insufficient torque).
-# All speeds MUST be ≥ 35 for forward, ≤ -35 for reverse.
-MOTOR_DEADZONE = 35               # minimum motor % that actually moves
-CRUISE_SPEED   = 55               # comfortable cruising
-CAUTIOUS_SPEED = 42               # slowing down, still responsive
-MINIMUM_SPEED  = 35               # barely moves — crawl / obstacle proximity
+# Speed settings (motor %) — from profile
+_motor = _PROFILE.get("motor", {})
+MOTOR_DEADZONE = _motor.get("dead_zone", 5)
+CRUISE_SPEED   = _motor.get("cruise_speed", 80)
+CAUTIOUS_SPEED = _motor.get("cautious_speed", 50)
+MINIMUM_SPEED  = _motor.get("minimum_speed", 20)
+
 # Legacy aliases (so FSM state names still map cleanly)
 MEDIUM_SPEED = CAUTIOUS_SPEED
 SLOW_SPEED   = MINIMUM_SPEED
-CRAWL_SPEED  = MINIMUM_SPEED
-REVERSE_FAST = -50
-REVERSE_SLOW = -38
+CRAWL_SPEED  = MINIMUM_SPEED           # dual motor: distinct from SLOW thanks to wide range
+REVERSE_FAST = _motor.get("reverse_fast", -60)
+REVERSE_SLOW = _motor.get("reverse_slow", -25)
 
-# Steering angles
+# Steering angles (hardware — same for all profiles)
 STEER_LEFT = 35
 STEER_SLIGHT_LEFT = 65
 STEER_RIGHT = 145
@@ -194,18 +288,21 @@ CENTRE = 90
 # ── Physics-derived distance thresholds (cm) ─────────────────────
 # Each threshold = stopping-distance for that speed band, rounded up
 # to the nearest 5 cm for sensor granularity.
+# With the dual-motor car (~11 cm/s max), stopping distances are tiny
+# (~8 cm), so we apply sensible minimums.
 _round5 = lambda x: int(math.ceil(x / 5.0)) * 5
 
-EMERGENCY_STOP_DIST = max(50, _round5(VEHICLE.stopping_distance(CRUISE_SPEED)))
-VERY_SAFE_DIST      = EMERGENCY_STOP_DIST + 40   # generous headroom for cruise
-SAFE_DIST           = EMERGENCY_STOP_DIST + 15    # medium speed band
-CAUTION_DIST        = _round5(VEHICLE.stopping_distance(SLOW_SPEED) + 15)
-DANGER_DIST         = _round5(VEHICLE.stopping_distance(CRAWL_SPEED) + 10)
-CRITICAL_DIST       = _round5(VEHICLE.stopping_distance(CRAWL_SPEED))
+_emergency_physics  = _round5(VEHICLE.stopping_distance(CRUISE_SPEED))
+EMERGENCY_STOP_DIST = max(15, _emergency_physics)     # at least 15 cm
+VERY_SAFE_DIST      = max(40, EMERGENCY_STOP_DIST + 25)
+SAFE_DIST           = max(30, EMERGENCY_STOP_DIST + 15)
+CAUTION_DIST        = max(22, _round5(VEHICLE.stopping_distance(SLOW_SPEED) + 10))
+DANGER_DIST         = max(17, _round5(VEHICLE.stopping_distance(CRAWL_SPEED) + 7))
+CRITICAL_DIST       = max(12, _round5(VEHICLE.stopping_distance(CRAWL_SPEED)))
 
 # ── Hysteresis enter/exit pairs ──────────────────────────────────
-CRUISE_ENTER  = VERY_SAFE_DIST + VEHICLE.hysteresis_cm   # need more room to speed up
-CRUISE_EXIT   = VERY_SAFE_DIST - VEHICLE.hysteresis_cm   # can stay a bit closer
+CRUISE_ENTER  = VERY_SAFE_DIST + VEHICLE.hysteresis_cm
+CRUISE_EXIT   = VERY_SAFE_DIST - VEHICLE.hysteresis_cm
 MEDIUM_ENTER  = SAFE_DIST + VEHICLE.hysteresis_cm
 MEDIUM_EXIT   = SAFE_DIST - VEHICLE.hysteresis_cm
 SLOW_ENTER    = CAUTION_DIST + VEHICLE.hysteresis_cm
@@ -216,7 +313,7 @@ CRAWL_EXIT    = DANGER_DIST - VEHICLE.hysteresis_cm
 # ── Rear distance thresholds ─────────────────────────────────────
 REAR_SAFE_DIST    = 60
 REAR_CAUTION_DIST = 45
-REAR_DANGER_DIST  = _round5(VEHICLE.stopping_distance(abs(REVERSE_SLOW)))
+REAR_DANGER_DIST  = max(10, _round5(VEHICLE.stopping_distance(abs(REVERSE_SLOW))))
 
 # ── TTC safety thresholds (seconds) ─────────────────────────────
 TTC_EMERGENCY = 0.6    # must stop immediately
@@ -245,14 +342,23 @@ STATE_TIMEOUT = {
 # ── Acceleration smoothing ───────────────────────────────────────
 MAX_SPEED_STEP = 5   # max motor-% change per control loop iteration
 
-# ── Terrain / incline parameters ─────────────────────────────────
-# Physics: on a slope of angle θ the gravitational pull-back is m·g·sin(θ).
-# We translate that into a motor-% boost so the car maintains forward speed.
-INCLINE_THRESHOLD   = 5.0    # degrees — below this, terrain is "flat"
-STEEP_INCLINE_LIMIT = 35.0   # degrees — above this, refuse to climb (safety)
-MAX_INCLINE_BOOST   = 15     # motor-%  — maximum uphill speed boost
-DOWNHILL_REDUCTION  = 10     # motor-%  — maximum downhill speed cut
-LATERAL_TILT_LIMIT  = 25.0   # degrees — lateral roll beyond which we stop (tip-over risk)
+# ── Terrain / incline parameters (from profile) ──────────────────
+_terrain = _PROFILE.get("terrain", {})
+INCLINE_THRESHOLD   = _terrain.get("incline_threshold", 5.0)
+STEEP_INCLINE_LIMIT = _terrain.get("steep_incline_limit", 35.0)
+MAX_INCLINE_BOOST   = _terrain.get("max_incline_boost", 15)
+DOWNHILL_REDUCTION  = _terrain.get("downhill_reduction", 10)
+LATERAL_TILT_LIMIT  = _terrain.get("lateral_tilt_limit", 25.0)
+
+# ── Log computed thresholds so operators can verify ──────────────
+log.info("Profile '%s' — speeds: cruise=%d%% (%.1f cm/s)  cautious=%d%%  "
+         "minimum=%d%%  dead_zone=%d%%",
+         ACTIVE_PROFILE, CRUISE_SPEED, VEHICLE.speed_at(CRUISE_SPEED),
+         CAUTIOUS_SPEED, MINIMUM_SPEED, MOTOR_DEADZONE)
+log.info("Thresholds: E-stop=%dcm  Safe=%dcm  Caution=%dcm  Danger=%dcm  "
+         "Critical=%dcm  Hysteresis=%.0fcm",
+         EMERGENCY_STOP_DIST, SAFE_DIST, CAUTION_DIST, DANGER_DIST,
+         CRITICAL_DIST, VEHICLE.hysteresis_cm)
 
 
 # ═══════════════════════════════════════════════════════════════════

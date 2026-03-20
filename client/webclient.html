@@ -65,6 +65,9 @@
             transform: translateY(-1px);
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         }
+        button.active {
+            box-shadow: 0 0 0 3px rgba(0,123,255,0.5);
+        }
         .motor-btn { background: #28a745; color: white; }
         .motor-btn:hover { background: #218838; }
         .stop-btn { background: #dc3545; color: white; }
@@ -73,6 +76,13 @@
         .servo-btn:hover { background: #0056b3; }
         .util-btn { background: #6c757d; color: white; }
         .util-btn:hover { background: #545b62; }
+        .light-btn { background: #ffc107; color: #212529; }
+        .light-btn:hover { background: #e0a800; }
+        .light-btn.active { background: #ffcd39; box-shadow: 0 0 0 3px rgba(255,193,7,0.5); }
+        .light-off-btn { background: #6c757d; color: white; }
+        .light-off-btn:hover { background: #545b62; }
+        .sensor-btn { background: #17a2b8; color: white; }
+        .sensor-btn:hover { background: #138496; }
         
         .slider-container {
             margin: 15px 0;
@@ -180,6 +190,121 @@
             outline: none;
             border-color: #007bff;
         }
+
+        /* Lights section */
+        .light-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 10px 0;
+        }
+        .light-status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 12px 0;
+            padding: 10px;
+            background: #fff;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        .light-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #6c757d;
+            transition: background 0.3s;
+        }
+        .light-dot.on { background: #ffc107; box-shadow: 0 0 6px #ffc107; }
+        .auto-light-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 48px;
+            height: 26px;
+            cursor: pointer;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: #ccc;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: #ffc107; }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(22px); }
+
+        /* Sensors section */
+        .sensor-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 10px 0;
+        }
+        .sensor-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            padding: 12px;
+            border-radius: 5px;
+            margin-top: 12px;
+            min-height: 60px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .sensor-output .label { color: #569cd6; }
+        .sensor-output .value { color: #b5cea8; }
+        .sensor-output .warn  { color: #f44747; }
+        .sensor-output .ok    { color: #6a9955; }
+        .sensor-output .dim   { color: #808080; }
+        .auto-refresh-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        /* Keyboard hints */
+        .kbd-hint {
+            background: #e9ecef;
+            border-radius: 5px;
+            padding: 12px;
+            margin-top: 15px;
+            font-size: 13px;
+            color: #495057;
+            line-height: 1.7;
+        }
+        .kbd-hint h4 { margin: 0 0 6px 0; font-size: 14px; }
+        kbd {
+            display: inline-block;
+            padding: 2px 7px;
+            font-size: 12px;
+            font-family: monospace;
+            color: #333;
+            background: #fafbfc;
+            border: 1px solid #d1d5da;
+            border-radius: 3px;
+            box-shadow: inset 0 -1px 0 #d1d5da;
+        }
         
         @media (max-width: 768px) {
             .control-grid {
@@ -194,6 +319,7 @@
         <div class="status connected" id="status">✅ Connected - Ready to Control!</div>
         
         <div class="control-grid">
+            <!-- D-Pad Control -->
             <div class="control">
                 <h3>🎮 D-Pad Control</h3>
                 <div class="dpad">
@@ -207,10 +333,27 @@
                     <button class="motor-btn" onmousedown="startMotor(-getCurrentSpeed())" onmouseup="stopMotor()" ontouchstart="startMotor(-getCurrentSpeed())" ontouchend="stopMotor()">⬇️</button>
                     <div class="empty"></div>
                 </div>
+                <div class="kbd-hint">
+                    <h4>⌨️ Keyboard Shortcuts</h4>
+                    <kbd>W</kbd>/<kbd>S</kbd> Forward/Reverse &nbsp;
+                    <kbd>A</kbd>/<kbd>D</kbd> Steer &nbsp;
+                    <kbd>C</kbd> Centre &nbsp;
+                    <kbd>Space</kbd> Stop<br>
+                    <kbd>F</kbd> Front lights &nbsp;
+                    <kbd>B</kbd> Back lights &nbsp;
+                    <kbd>L</kbd> Both &nbsp;
+                    <kbd>O</kbd> Lights off<br>
+                    <kbd>1</kbd> Accel &nbsp;
+                    <kbd>2</kbd> ToF &nbsp;
+                    <kbd>3</kbd> Ultrasonic &nbsp;
+                    <kbd>4</kbd> All sensors &nbsp;
+                    <kbd>5</kbd> Lights status
+                </div>
             </div>
             
+            <!-- Motor / Servo Control -->
             <div class="control">
-                <h3>⚙️ Motor Speed Control</h3>
+                <h3>⚙️ Motor &amp; Servo</h3>
                 <div class="slider-container">
                     <label>Speed Setting:</label>
                     <div class="slider-wrapper">
@@ -233,11 +376,6 @@
                     </div>
                     <div class="value-display" id="motorDisplay">0</div>
                 </div>
-                <button class="stop-btn" onclick="emergencyStop()">🛑 Emergency Stop</button>
-            </div>
-            
-            <div class="control">
-                <h3>🧭 Servo Control</h3>
                 <div class="slider-container">
                     <label>Servo Angle:</label>
                     <div class="slider-wrapper">
@@ -252,10 +390,59 @@
                 <button class="servo-btn" onclick="turnLeft()">⬅️ Left</button>
                 <button class="servo-btn" onclick="sendServo(90)">🎯 Center</button>
                 <button class="servo-btn" onclick="turnRight()">➡️ Right</button>
+                <button class="stop-btn" onclick="emergencyStop()">🛑 Emergency Stop</button>
             </div>
             
+            <!-- Lights Control -->
             <div class="control">
-                <h3>💬 Send Message</h3>
+                <h3>💡 Lights Control</h3>
+                <div class="light-buttons">
+                    <button class="light-btn" id="btnLightFront" onclick="setLights('front')">🔦 Front</button>
+                    <button class="light-btn" id="btnLightBack" onclick="setLights('back')">🔴 Back</button>
+                    <button class="light-btn" id="btnLightBoth" onclick="setLights('both')">💡 Both</button>
+                    <button class="light-off-btn" id="btnLightOff" onclick="setLights('off')">⬛ Off</button>
+                </div>
+                <div class="light-status-indicator">
+                    <span style="font-weight:bold; color:#495057;">Front:</span>
+                    <span class="light-dot" id="lightDotFront"></span>
+                    <span style="font-weight:bold; color:#495057; margin-left:10px;">Back:</span>
+                    <span class="light-dot" id="lightDotBack"></span>
+                    <span style="margin-left:auto; color:#6c757d; font-size:14px;" id="lightStatusText">off</span>
+                </div>
+                <div class="auto-light-toggle">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoLightToggle" checked onchange="toggleAutoLights()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span style="font-weight:bold; color:#495057;">Auto lights</span>
+                    <span style="color:#6c757d; font-size:13px;" id="autoLightLabel">ON — lights follow movement</span>
+                </div>
+            </div>
+
+            <!-- Sensors Dashboard -->
+            <div class="control">
+                <h3>📡 Sensors</h3>
+                <div class="sensor-buttons">
+                    <button class="sensor-btn" onclick="fetchSensor('accelerometer')">🧭 Accel</button>
+                    <button class="sensor-btn" onclick="fetchSensor('tof')">📏 ToF</button>
+                    <button class="sensor-btn" onclick="fetchSensor('ultrasonic')">📐 Ultrasonic</button>
+                    <button class="sensor-btn" onclick="fetchAllSensors()">📊 All Sensors</button>
+                    <button class="util-btn" onclick="fetchLightsStatus()">💡 Lights Status</button>
+                </div>
+                <div class="auto-refresh-row">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span style="font-weight:bold; color:#495057;">Auto-refresh</span>
+                    <span style="color:#6c757d; font-size:13px;" id="autoRefreshLabel">OFF</span>
+                </div>
+                <div class="sensor-output" id="sensorOutput"><span class="dim">Press a sensor button to read data…</span></div>
+            </div>
+
+            <!-- Display / Message Control -->
+            <div class="control" style="grid-column: 1 / -1;">
+                <h3>💬 Display &amp; Status</h3>
                 <div class="message-input">
                     <input type="text" id="messageInput" placeholder="Type your message here..." maxlength="50">
                     <button class="util-btn" onclick="sendMessage()">📤 Send</button>
@@ -275,144 +462,271 @@
     <script>
         const PICO = "http://192.168.178.30:5000";  // Set your Pico W's IP address here
 
+        // ── State ──────────────────────────────────────────────
+        let autoLights = true;
+        let lastLightTarget = "";
+        let autoRefreshTimer = null;
+        let keysDown = {};  // track held keys for keyup stop
+
+        // ── Status bar ─────────────────────────────────────────
         function updateStatus(message, isSuccess = true) {
             const status = document.getElementById('status');
             status.textContent = isSuccess ? `✅ ${message}` : `⚠️ ${message}`;
             status.className = isSuccess ? 'status connected' : 'status';
         }
-        
-        function updateSpeedDisplay(value) {
-            document.getElementById('speedDisplay').textContent = value;
-        }
-        
-        function updateMotorDisplay(value) {
-            document.getElementById('motorDisplay').textContent = value;
-        }
-        
-        function updateServoDisplay(value) {
-            document.getElementById('servoDisplay').textContent = value + '°';
-        }
-        
-        function getCurrentSpeed() {
-            return parseInt(document.getElementById('speedSlider').value);
-        }
-        
-        function startMotor(speed) {
-            sendMotor(speed);
-        }
-        
-        function stopMotor() {
-            sendMotor(0);
-        }
-        
+
+        // ── Display helpers ────────────────────────────────────
+        function updateSpeedDisplay(v) { document.getElementById('speedDisplay').textContent = v; }
+        function updateMotorDisplay(v) { document.getElementById('motorDisplay').textContent = v; }
+        function updateServoDisplay(v) { document.getElementById('servoDisplay').textContent = v + '°'; }
+        function getCurrentSpeed()     { return parseInt(document.getElementById('speedSlider').value); }
+
+        // ── Motor ──────────────────────────────────────────────
+        function startMotor(speed) { sendMotor(speed); }
+        function stopMotor()       { sendMotor(0); }
+
         function releaseMotorSlider() {
-            // Auto-return motor slider to center (0) when released
             setTimeout(() => {
                 document.getElementById('motorSlider').value = 0;
                 updateMotorDisplay(0);
                 sendMotor(0);
             }, 100);
         }
-        
-        function turnLeft() {
-            const currentAngle = parseInt(document.getElementById('servoSlider').value);
-            const newAngle = Math.max(0, currentAngle - 15); // Turn left by 15° each press
-            sendServo(newAngle);
-        }
-        
-        function turnRight() {
-            const currentAngle = parseInt(document.getElementById('servoSlider').value);
-            const newAngle = Math.min(180, currentAngle + 15); // Turn right by 15° each press
-            sendServo(newAngle);
-        }
-        
+
         function sendMotor(speed) {
+            speed = Math.max(-100, Math.min(100, parseInt(speed)));
             fetch(`${PICO}/api/motor/${speed}`)
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
                     updateStatus(data.message, data.success);
                     document.getElementById('motorSlider').value = speed;
                     updateMotorDisplay(speed);
+                    // Auto-lights: match Python client behaviour
+                    if (autoLights) {
+                        let target = speed > 0 ? 'front' : speed < 0 ? 'back' : 'off';
+                        if (target !== lastLightTarget) {
+                            lastLightTarget = target;
+                            fetch(`${PICO}/api/lights/${target}`).then(r => r.json()).then(updateLightUI).catch(() => {});
+                        }
+                    }
                 })
-                .catch(error => {
-                    updateStatus('Motor command failed', false);
-                    console.error('Motor error:', error);
-                });
+                .catch(() => updateStatus('Motor command failed', false));
         }
-        
+
+        // ── Servo ──────────────────────────────────────────────
+        function turnLeft() {
+            const cur = parseInt(document.getElementById('servoSlider').value);
+            sendServo(Math.max(0, cur - 15));
+        }
+        function turnRight() {
+            const cur = parseInt(document.getElementById('servoSlider').value);
+            sendServo(Math.min(180, cur + 15));
+        }
+
         function sendServo(angle) {
+            angle = Math.max(0, Math.min(180, parseInt(angle)));
             fetch(`${PICO}/api/servo/${angle}`)
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
                     updateStatus(data.message, data.success);
                     document.getElementById('servoSlider').value = angle;
                     updateServoDisplay(angle);
                 })
-                .catch(error => {
-                    updateStatus('Servo command failed', false);
-                    console.error('Servo error:', error);
-                });
+                .catch(() => updateStatus('Servo command failed', false));
         }
-        
+
+        // ── Emergency stop ─────────────────────────────────────
+        function emergencyStop() {
+            sendMotor(0);
+            document.getElementById('motorSlider').value = 0;
+            updateMotorDisplay(0);
+            updateStatus('Emergency stop activated!', true);
+        }
+
+        // ══════════════════════════════════════════════════════
+        //  LIGHTS  (matches picar_client.py)
+        // ══════════════════════════════════════════════════════
+        function setLights(status) {
+            fetch(`${PICO}/api/lights/${status}`)
+                .then(r => r.json())
+                .then(data => {
+                    updateStatus(data.message || `Lights: ${status}`, data.success);
+                    updateLightUI(data);
+                })
+                .catch(() => updateStatus('Lights command failed', false));
+        }
+
+        function updateLightUI(data) {
+            if (!data) return;
+            const front = data.front === true;
+            const back  = data.back  === true;
+            document.getElementById('lightDotFront').className = 'light-dot' + (front ? ' on' : '');
+            document.getElementById('lightDotBack').className  = 'light-dot' + (back  ? ' on' : '');
+            const st = data.status || (front && back ? 'both' : front ? 'front' : back ? 'back' : 'off');
+            document.getElementById('lightStatusText').textContent = st;
+
+            // Highlight active button
+            ['Front','Back','Both','Off'].forEach(n => {
+                document.getElementById('btnLight' + n).classList.remove('active');
+            });
+            const map = { front: 'Front', back: 'Back', both: 'Both', off: 'Off' };
+            const btn = document.getElementById('btnLight' + (map[st] || 'Off'));
+            if (btn) btn.classList.add('active');
+        }
+
+        function toggleAutoLights() {
+            autoLights = document.getElementById('autoLightToggle').checked;
+            document.getElementById('autoLightLabel').textContent =
+                autoLights ? 'ON — lights follow movement' : 'OFF';
+            updateStatus(`Auto lights: ${autoLights ? 'ON' : 'OFF'}`);
+        }
+
+        function fetchLightsStatus() {
+            fetch(`${PICO}/api/lights`)
+                .then(r => r.json())
+                .then(data => {
+                    updateLightUI(data);
+                    setSensorOutput(formatLights(data));
+                })
+                .catch(() => setSensorOutput('<span class="warn">Lights: request failed</span>'));
+        }
+
+        // ══════════════════════════════════════════════════════
+        //  SENSORS  (matches picar_client.py formatters)
+        // ══════════════════════════════════════════════════════
+        function setSensorOutput(html) {
+            document.getElementById('sensorOutput').innerHTML = html;
+        }
+
+        function fetchSensor(type) {
+            setSensorOutput('<span class="dim">Reading ' + type + '…</span>');
+            fetch(`${PICO}/api/${type}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (type === 'accelerometer') setSensorOutput(formatAccelerometer(data));
+                    else if (type === 'tof')      setSensorOutput(formatTof(data));
+                    else if (type === 'ultrasonic') setSensorOutput(formatUltrasonic(data));
+                    else setSensorOutput('<pre>' + JSON.stringify(data, null, 2) + '</pre>');
+                })
+                .catch(() => setSensorOutput(`<span class="warn">${type}: request failed</span>`));
+        }
+
+        function fetchAllSensors() {
+            setSensorOutput('<span class="dim">Reading all sensors…</span>');
+            Promise.allSettled([
+                fetch(`${PICO}/api/accelerometer`).then(r => r.json()),
+                fetch(`${PICO}/api/tof`).then(r => r.json()),
+                fetch(`${PICO}/api/ultrasonic`).then(r => r.json()),
+            ]).then(([accel, tof, ultra]) => {
+                let html = '<span class="label">━━━ All Sensors ━━━</span>\n';
+                html += formatAccelerometer(accel.status === 'fulfilled' ? accel.value : { success: false }) + '\n';
+                html += formatTof(tof.status === 'fulfilled' ? tof.value : { success: false }) + '\n';
+                html += formatUltrasonic(ultra.status === 'fulfilled' ? ultra.value : { success: false });
+                setSensorOutput(html);
+            });
+        }
+
+        // ── Formatters (mirror picar_client.py) ────────────────
+        function formatAccelerometer(data) {
+            if (!data || !data.success) return '<span class="dim">Accelerometer: Not available</span>';
+            const tilt = data.tilt || {};
+            const orientation = data.orientation || 'unknown';
+            const pitch = (tilt.pitch || 0).toFixed(1);
+            const roll  = (tilt.roll  || 0).toFixed(1);
+            return `<span class="label">🧭 Accel:</span> Pitch=<span class="value">${pitch}°</span> Roll=<span class="value">${roll}°</span> [<span class="ok">${orientation}</span>]`;
+        }
+
+        function formatTof(data) {
+            if (!data || !data.success) return '<span class="dim">ToF: Not available</span>';
+            const left  = data.left_distance_cm  ? data.left_distance_cm.toFixed(1) + 'cm' : '---';
+            const right = data.right_distance_cm ? data.right_distance_cm.toFixed(1) + 'cm' : '---';
+            let html = `<span class="label">📏 ToF Front:</span> L=<span class="value">${left}</span> R=<span class="value">${right}</span>`;
+            if (data.angle) {
+                const a = data.angle;
+                html += ` | <span class="value">${a.angle_degrees.toFixed(1)}°</span> [<span class="ok">${a.orientation}</span>]`;
+            }
+            return html;
+        }
+
+        function formatUltrasonic(data) {
+            if (!data || !data.success) return '<span class="dim">Ultrasonic: Not available</span>';
+            if (data.in_range) {
+                const d = (data.distance_cm || 0).toFixed(1);
+                const warn = data.distance_cm < 30 ? ' <span class="warn">⚠️ CLOSE!</span>' : '';
+                return `<span class="label">📐 Ultrasonic Rear:</span> <span class="value">${d}cm</span>${warn}`;
+            }
+            return '<span class="label">📐 Ultrasonic Rear:</span> <span class="ok">All clear</span>';
+        }
+
+        function formatLights(data) {
+            if (!data || !data.success) return '<span class="dim">Lights: Not available</span>';
+            const st = data.status || 'unknown';
+            return `<span class="label">💡 Lights:</span> <span class="value">${st}</span>`;
+        }
+
+        // ── Auto-refresh ───────────────────────────────────────
+        function toggleAutoRefresh() {
+            const on = document.getElementById('autoRefreshToggle').checked;
+            document.getElementById('autoRefreshLabel').textContent = on ? 'ON (2 s)' : 'OFF';
+            if (on) {
+                fetchAllSensors();
+                autoRefreshTimer = setInterval(fetchAllSensors, 2000);
+            } else {
+                clearInterval(autoRefreshTimer);
+                autoRefreshTimer = null;
+            }
+        }
+
+        // ══════════════════════════════════════════════════════
+        //  DISPLAY / MESSAGE
+        // ══════════════════════════════════════════════════════
         function loadIcons() {
             fetch(`${PICO}/api/icons`)
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
                     if (!data.success) return;
-                    const select = document.getElementById('iconSelect');
+                    const sel = document.getElementById('iconSelect');
                     data.icons.forEach(name => {
                         const opt = document.createElement('option');
                         opt.value = name;
                         opt.textContent = name;
-                        select.appendChild(opt);
+                        sel.appendChild(opt);
                     });
                 })
-                .catch(() => {}); // silently ignore if not available
+                .catch(() => {});
         }
 
         function sendMessage() {
             const message = document.getElementById('messageInput').value.trim();
-            if (!message) {
-                updateStatus('Please enter a message', false);
-                return;
-            }
+            if (!message) { updateStatus('Please enter a message', false); return; }
             const icon = document.getElementById('iconSelect').value || null;
-
             fetch(`${PICO}/api/text`, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: message, icon: icon})
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: message, icon: icon })
             })
-                .then(response => response.json())
-                .then(data => {
-                    updateStatus(data.message, data.success);
-                    if (data.success) {
-                        document.getElementById('messageInput').value = '';
-                    }
-                })
-                .catch(error => {
-                    updateStatus('Message send failed', false);
-                    console.error('Message error:', error);
-                });
+            .then(r => r.json())
+            .then(data => {
+                updateStatus(data.message, data.success);
+                if (data.success) document.getElementById('messageInput').value = '';
+            })
+            .catch(() => updateStatus('Message send failed', false));
         }
-        
+
         function clearMessage() {
             fetch(`${PICO}/api/text`, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: ''})
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: '' })
             })
-                .then(response => response.json())
-                .then(data => updateStatus('Display cleared', data.success))
-                .catch(error => {
-                    updateStatus('Clear failed', false);
-                    console.error('Clear error:', error);
-                });
+            .then(r => r.json())
+            .then(data => updateStatus('Display cleared', data.success))
+            .catch(() => updateStatus('Clear failed', false));
         }
-        
+
         function getStatus() {
             fetch(`${PICO}/api/status`)
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
                     updateStatus(data.message, data.success);
                     if (data.success) {
@@ -422,44 +736,73 @@
                         updateServoDisplay(data.servo_angle || 90);
                     }
                 })
-                .catch(error => {
-                    updateStatus('Status request failed', false);
-                    console.error('Status error:', error);
-                });
+                .catch(() => updateStatus('Status request failed', false));
         }
-        
-        function emergencyStop() {
-            sendMotor(0);
-            // Don't auto-center servo on emergency stop - keep current position
-            // Reset motor slider to center
-            document.getElementById('motorSlider').value = 0;
-            updateMotorDisplay(0);
-            updateStatus('Emergency stop activated!', true);
-        }
-        
+
+        // ══════════════════════════════════════════════════════
+        //  KEYBOARD CONTROLS  (matches picar_client.py key map)
+        // ══════════════════════════════════════════════════════
+        document.addEventListener('keydown', (e) => {
+            // Skip if focused in a text input / select
+            const tag = e.target.tagName.toLowerCase();
+            if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+
+            const key = e.key.toLowerCase();
+
+            // Prevent default for keys we handle
+            if (['w','s','a','d','c',' ','f','b','l','o','t','1','2','3','4','5'].includes(key)) {
+                e.preventDefault();
+            }
+
+            // Debounce held keys for motor/servo
+            if (keysDown[key]) return;
+            keysDown[key] = true;
+
+            switch (key) {
+                // Movement
+                case 'w': sendMotor(getCurrentSpeed());  break;
+                case 's': sendMotor(-getCurrentSpeed()); break;
+                case 'a': turnLeft();  break;
+                case 'd': turnRight(); break;
+                case 'c': sendServo(90); break;
+                case ' ': emergencyStop(); break;
+                // Lights
+                case 'f': setLights('front'); break;
+                case 'b': setLights('back');  break;
+                case 'l': setLights('both');  break;
+                case 'o': setLights('off');   break;
+                case 't':
+                    document.getElementById('autoLightToggle').checked = !autoLights;
+                    toggleAutoLights();
+                    break;
+                // Sensors
+                case '1': fetchSensor('accelerometer'); break;
+                case '2': fetchSensor('tof');           break;
+                case '3': fetchSensor('ultrasonic');     break;
+                case '4': fetchAllSensors();             break;
+                case '5': fetchLightsStatus();           break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            delete keysDown[key];
+            // Stop motor when W or S released (hold-to-drive)
+            if (key === 'w' || key === 's') {
+                sendMotor(0);
+            }
+        });
+
         // Allow Enter key to send message
-        document.getElementById('messageInput').addEventListener('keypress', (event) => {
-            if (event.key === 'Enter') {
-                sendMessage();
-            }
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
         });
-        
-        // Prevent keyboard controls when typing in input field
-        document.addEventListener('keydown', (event) => {
-            // Only prevent keyboard shortcuts if not typing in an input field
-            if (event.target.tagName.toLowerCase() === 'input') {
-                return; // Allow normal typing in input fields
-            }
-            
-            // Disable all keyboard shortcuts to prevent conflicts
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'W', 's', 'S', 'a', 'A', 'd', 'D', ' '].includes(event.key)) {
-                event.preventDefault();
-            }
-        });
-        
-        // Initial status check + load icons
+
+        // ── Init ───────────────────────────────────────────────
         setTimeout(getStatus, 500);
         loadIcons();
+        // Initial lights status
+        fetch(`${PICO}/api/lights`).then(r => r.json()).then(updateLightUI).catch(() => {});
     </script>
 </body>
 </html>

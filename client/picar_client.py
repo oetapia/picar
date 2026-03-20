@@ -26,6 +26,7 @@ class PicarClient:
         self.base_url = base_url
         self.session = requests.Session()
         self.auto_lights = True  # Automatic light control based on movement
+        self._last_light_target: str = ""  # debounce: skip if state unchanged
 
     def _get(self, path):
         response = self.session.get(f"{self.base_url}{path}", timeout=5)
@@ -46,7 +47,9 @@ class PicarClient:
         speed = max(-100, min(100, int(speed)))
         result = self._get(f"/api/motor/{speed}")
         
-        # Automatic light control based on movement direction (non-blocking)
+        # Automatic light control based on movement direction (non-blocking).
+        # Uses requests.get directly (not self.session) to avoid thread-safety issues
+        # when the navigation loop is concurrently using the session.
         if self.auto_lights:
             if speed > 0:
                 target = "front"
@@ -54,7 +57,13 @@ class PicarClient:
                 target = "back"
             else:
                 target = "off"
-            threading.Thread(target=self.set_lights, args=(target,), daemon=True).start()
+            if target != self._last_light_target:
+                self._last_light_target = target
+                url = f"{self.base_url}/api/lights/{target}"
+                threading.Thread(
+                    target=lambda: requests.get(url, timeout=5),
+                    daemon=True
+                ).start()
         
         return result
 

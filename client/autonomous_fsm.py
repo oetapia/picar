@@ -218,6 +218,7 @@ class AutonomousFSM:
     
     def _navigation_loop(self):
         """Main navigation loop running in background thread."""
+        log.info("Navigation loop thread started")
         while self.autonomous:
             loop_start = time.time()
 
@@ -225,6 +226,7 @@ class AutonomousFSM:
                 # ── Sensor reading ───────────────────────────────
                 perception_state = self._read_sensors()
                 if perception_state is None:
+                    log.warning("Sensors returned None (ToF unavailable?)")
                     if time.time() - self._last_sensor_time > hooks.SENSOR_MAX_AGE:
                         log.warning("Sensor stale > %.0f ms — emergency stop",
                                     hooks.SENSOR_MAX_AGE * 1000)
@@ -234,6 +236,11 @@ class AutonomousFSM:
                             self._current_motor_pct = 0
                     time.sleep(0.1)
                     continue
+
+                log.info("Sensors OK — front=%.0fcm rear=%.0fcm state=%s",
+                         perception_state.front_clearance,
+                         perception_state.rear_clearance,
+                         self.state.name)
 
                 with self._lock:
                     self._last_sensor_time = perception_state.timestamp
@@ -535,7 +542,7 @@ class AutonomousFSM:
             self._current_direction = "forward"
             self._current_motor_pct = smoothed
         status = hooks.format_console_status(mode, steer_label, left, right, smoothed)
-        print(f"\r{status}", end="")
+        print(f"\r{status}", end="", flush=True)
 
     def _handle_reverse_perception(self, state, left: float, right: float):
         """Handle tactical reverse with smoothing."""
@@ -547,7 +554,7 @@ class AutonomousFSM:
             self._current_motor_pct = smoothed
         servo, steer_label = hooks.calculate_reverse_steering(left, right)
         status = hooks.format_reverse_status(steer_label, state.rear_clearance, smoothed)
-        print(f"\r{status}", end="")
+        print(f"\r{status}", end="", flush=True)
     
     # ═══════════════════════════════════════════════════════════════
     # STATE TRANSITIONS (validated)
@@ -703,6 +710,12 @@ def main():
     print("  ✓ Sensor fusion + IMU + obstacle tracking")
     print()
     
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S"
+    )
+
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:

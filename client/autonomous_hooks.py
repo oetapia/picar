@@ -863,11 +863,19 @@ def smooth_speed(current_motor: int, target_motor: int) -> int:
 
     Prevents jerky acceleration / deceleration which can cause
     wheel-spin and sensor vibration.
+
+    Skips the dead zone when starting from rest so the motor moves immediately.
     """
     diff = target_motor - current_motor
     if abs(diff) <= MAX_SPEED_STEP:
         return target_motor
-    return current_motor + (MAX_SPEED_STEP if diff > 0 else -MAX_SPEED_STEP)
+    next_speed = current_motor + (MAX_SPEED_STEP if diff > 0 else -MAX_SPEED_STEP)
+    # When starting from stopped, jump directly to the minimum speed that moves the motor
+    if current_motor == 0 and target_motor > 0:
+        return max(next_speed, MOTOR_DEADZONE)
+    if current_motor == 0 and target_motor < 0:
+        return min(next_speed, -MOTOR_DEADZONE)
+    return next_speed
 
 
 # ═══════════════════════════════════════════════════════════════════

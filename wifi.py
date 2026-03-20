@@ -24,6 +24,10 @@ def connect_wifi():
             print('WiFi connection failed!')
             return None
 
+    # Disable WiFi power management — prevents the CYW43 radio from sleeping
+    # between packets, which otherwise causes 1-2s wake-up latency per request.
+    wlan.config(pm=0xa11140)
+
     ip_info = wlan.ifconfig()
     print(f'Connected to WiFi. IP: {ip_info[0]}')
     return wlan

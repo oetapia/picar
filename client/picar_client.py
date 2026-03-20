@@ -1,6 +1,7 @@
 import requests
 import time
 import sys
+import threading
 from pathlib import Path
 
 # Import config from parent directory
@@ -45,17 +46,15 @@ class PicarClient:
         speed = max(-100, min(100, int(speed)))
         result = self._get(f"/api/motor/{speed}")
         
-        # Automatic light control based on movement direction
+        # Automatic light control based on movement direction (non-blocking)
         if self.auto_lights:
             if speed > 0:
-                # Moving forward - turn on front lights
-                self.set_lights("front")
+                target = "front"
             elif speed < 0:
-                # Moving backward - turn on back lights
-                self.set_lights("back")
+                target = "back"
             else:
-                # Stopped - turn off lights
-                self.set_lights("off")
+                target = "off"
+            threading.Thread(target=self.set_lights, args=(target,), daemon=True).start()
         
         return result
 

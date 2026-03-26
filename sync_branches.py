@@ -168,49 +168,58 @@ def cherry_pick_with_auto_resolve(commit_hash: str, auto_resolve: bool = False) 
         # Get list of conflicted files
         code, status_output, _ = run_command(['git', 'status', '--porcelain'])
         
-        files_to_remove = []
-        files_to_keep = []
-        
+        files_to_remove = []    # non-production conflicted files to drop
+        files_to_take = []      # production conflicted files to take from incoming
+        files_to_keep = []      # production conflicts needing manual resolution
+
+        # Conflict status codes: UU=both modified, AA=both added,
+        # DU=deleted by us, UD=deleted by them, AU/UA=add conflicts
+        CONFLICT_STATUSES = {'UU', 'AA', 'DD', 'DU', 'UD', 'AU', 'UA'}
+
         for line in status_output.split('\n'):
             if not line.strip():
                 continue
-            
-            # Parse git status output
             status = line[:2]
             filepath = line[3:].strip()
-            
-            # Files deleted by us (DU) or modified/deleted conflicts (UD)
-            if 'DU' in status or 'UD' in status:
-                if is_non_production_file(filepath):
-                    files_to_remove.append(filepath)
-                    print(f"   {Colors.YELLOW}→ Will remove (non-production): {filepath}{Colors.ENDC}")
-                else:
-                    files_to_keep.append(filepath)
-                    print(f"   {Colors.RED}→ Conflict needs manual resolution: {filepath}{Colors.ENDC}")
-        
-        if files_to_keep and not auto_resolve:
+            if status not in CONFLICT_STATUSES:
+                continue
+            if is_non_production_file(filepath):
+                files_to_remove.append(filepath)
+                print(f"   {Colors.YELLOW}→ Will remove (non-production): {filepath}{Colors.ENDC}")
+            elif auto_resolve:
+                files_to_take.append(filepath)
+                print(f"   {Colors.CYAN}→ Will take incoming (auto-resolve): {filepath}{Colors.ENDC}")
+            else:
+                files_to_keep.append(filepath)
+                print(f"   {Colors.RED}→ Conflict needs manual resolution: {filepath}{Colors.ENDC}")
+
+        if files_to_keep:
             print(f"\n{Colors.RED}✗ Manual conflicts detected. Use --auto-resolve to force, or resolve manually.{Colors.ENDC}")
             run_command(['git', 'cherry-pick', '--abort'], check=False)
             return False
-        
-        # Auto-resolve by removing non-production files
-        if auto_resolve or not files_to_keep:
-            for filepath in files_to_remove:
-                run_command(['git', 'rm', filepath], check=False)
-            
-            # Add all resolved changes
-            run_command(['git', 'add', '.'])
-            
-            # Continue cherry-pick
-            code, _, _ = run_command(['git', 'cherry-pick', '--continue'], check=False)
-            
-            if code == 0:
-                print(f"{Colors.GREEN}✓ Cherry-pick completed with auto-resolution{Colors.ENDC}")
-                return True
-            else:
-                print(f"{Colors.RED}✗ Cherry-pick failed even after auto-resolution{Colors.ENDC}")
-                run_command(['git', 'cherry-pick', '--abort'], check=False)
-                return False
+
+        # Remove non-production files
+        for filepath in files_to_remove:
+            run_command(['git', 'rm', '--force', '-q', filepath], check=False)
+
+        # Take incoming version for production conflicts
+        for filepath in files_to_take:
+            run_command(['git', 'checkout', '--theirs', filepath], check=False)
+            run_command(['git', 'add', filepath], check=False)
+
+        # Stage everything and continue
+        run_command(['git', 'add', '.'])
+        code, stdout, stderr = run_command(['git', 'cherry-pick', '--continue'], check=False)
+
+        if code == 0:
+            print(f"{Colors.GREEN}✓ Cherry-pick completed with auto-resolution{Colors.ENDC}")
+            return True
+        else:
+            print(f"{Colors.RED}✗ Cherry-pick failed even after auto-resolution{Colors.ENDC}")
+            print(f"  stdout: {stdout.strip()}")
+            print(f"  stderr: {stderr.strip()}")
+            run_command(['git', 'cherry-pick', '--abort'], check=False)
+            return False
     
     print(f"{Colors.RED}✗ Cherry-pick failed{Colors.ENDC}")
     run_command(['git', 'cherry-pick', '--abort'], check=False)

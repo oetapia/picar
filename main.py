@@ -104,6 +104,39 @@ def api_motor(request, speed):
         led.off()
     return create_cors_response(response_data)
 
+@app.route('/api/brake')
+def api_brake(request):
+    """Active brake — immediately stops the motor (DRV8871 only)."""
+    led.on()
+    try:
+        if hasattr(motor, 'brake'):
+            motor.brake()
+            motor.current_motor_speed = 0
+            _on_command(request, "BRAKE")
+            response_data = {
+                'success': True,
+                'motor_speed': 0,
+                'message': 'Active brake engaged'
+            }
+            print("Active brake engaged")
+        else:
+            # Fallback for drivers without brake (TB6612FNG)
+            motor.current_motor_speed = 0
+            motor.update_motor()
+            _on_command(request, "Motor: 0")
+            response_data = {
+                'success': True,
+                'motor_speed': 0,
+                'message': 'Coast stop (brake not supported by driver)'
+            }
+            print("Coast stop (no brake function)")
+    except Exception as e:
+        response_data = {'success': False, 'message': f'Brake error: {e}'}
+        print(f"Brake error: {e}")
+    finally:
+        led.off()
+    return create_cors_response(response_data)
+
 @app.route('/api/servo/<int:angle>')
 def api_servo(request, angle):
     led.on()

@@ -17,55 +17,17 @@ Options:
 
 import subprocess
 import sys
+import json
 import argparse
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Tuple
 
-# Production files - these should exist in production-pico branch
-PRODUCTION_FILES = {
-    # Core application files
-    'main.py',
-    'wifi.py',
-    'motor.py',
-    'motor2.py',
-    'motor3.py',
-    'servo.py',
-    'display.py',
-    'lights.py',
-    'icons.py',
-    'icons.json',
-    'vl53l0x_mp.py',
-    
-    # Configuration
-    'config.example.py',
-    '.gitignore',
-    
-    # Documentation
-    'README_PRODUCTION.md',
-    'CONFIG_MIGRATION.md',
-    'deploy_to_pico.py',
-    
-    # Directories
-    'microdot/',
-    'sensors/',
-}
+_config_path = Path(__file__).parent / 'pico_files.json'
+with open(_config_path) as _f:
+    _PICO_FILES = json.load(_f)
 
-# Non-production files - these should NOT exist in production-pico
-NON_PRODUCTION_PATTERNS = {
-    'client/',
-    'test_*.py',
-    '*_test.py', 
-    'main_long.py',
-    'ACCELEROMETER_README.md',
-    'DUAL_TOF_README.md',
-    'ULTRASONIC_README.md',
-    'images/',
-    'screen/',
-    'utemplate/',
-    'image_to_icon.py',
-    'sync_branches.py',
-    '*.md',
-}
+_INCLUDE_FILES: List[str] = _PICO_FILES['include_files']
+_INCLUDE_DIRS: List[str] = _PICO_FILES['include_dirs']
 
 
 class Colors:
@@ -116,12 +78,13 @@ def get_uncommitted_changes() -> List[str]:
     return []
 
 
-def is_non_production_file(filepath: str) -> bool:
-    """Check if a file should NOT be in production-pico"""
-    from fnmatch import fnmatch
-    
-    for pattern in NON_PRODUCTION_PATTERNS:
-        if fnmatch(filepath, pattern) or filepath.startswith(pattern.rstrip('/')):
+def is_production_file(filepath: str) -> bool:
+    """Check if a file belongs in production-pico (allowlist from pico_files.json)."""
+    name = Path(filepath).name
+    if name in _INCLUDE_FILES or filepath in _INCLUDE_FILES:
+        return True
+    for d in _INCLUDE_DIRS:
+        if filepath.startswith(d.rstrip('/') + '/'):
             return True
     return False
 
@@ -177,7 +140,7 @@ def cherry_pick_with_auto_resolve(commit_hash: str, auto_resolve: bool = False) 
             filepath = line[3:].strip()
             if status not in CONFLICT_STATUSES:
                 continue
-            if is_non_production_file(filepath):
+            if not is_production_file(filepath):
                 files_to_remove.append(filepath)
                 print(f"   {Colors.YELLOW}→ Will remove (non-production): {filepath}{Colors.ENDC}")
             elif auto_resolve:
@@ -303,8 +266,8 @@ Examples:
         print(f"{Colors.CYAN}Commit: {commit_info.strip()}{Colors.ENDC}")
 
         files = get_commit_files(commit_hash)
-        production_files = [f for f in files if not is_non_production_file(f)]
-        non_production_files = [f for f in files if is_non_production_file(f)]
+        production_files = [f for f in files if is_production_file(f)]
+        non_production_files = [f for f in files if not is_production_file(f)]
 
         if production_files:
             print(f"{Colors.GREEN}  ✓ Will sync:{Colors.ENDC}")
@@ -341,7 +304,7 @@ Examples:
     # Cherry-pick all commits that have at least one production file
     for commit_hash in commits:
         files = get_commit_files(commit_hash)
-        if not any(not is_non_production_file(f) for f in files):
+        if not any(is_production_file(f) for f in files):
             continue  # nothing to apply to production-pico
         success = cherry_pick_with_auto_resolve(commit_hash, args.auto_resolve)
         if not success:

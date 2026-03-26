@@ -21,43 +21,22 @@ Options:
 import subprocess
 import os
 import sys
+import json
 import hashlib
 from pathlib import Path
 from datetime import datetime
 
+_config_path = Path(__file__).parent / 'pico_files.json'
+with open(_config_path) as _f:
+    _PICO_FILES = json.load(_f)
+
 
 class PicoDeployer:
     """Deploy files to Raspberry Pi Pico using mpremote."""
-    
-    # Files and directories to include in deployment
-    INCLUDE_FILES = [
-        'main.py',
-        'wifi.py',
-        'motor.py',
-        'motor2.py',
-        'servo.py',
-        'display.py',
-        'config.py',
-        'lights.py',
-        'icons.py',
-        'icons.json',
-        'vl53l0x_mp.py',
-    ]
-    
-    INCLUDE_DIRS = [
-        'microdot',
-        'sensors',
-    ]
-    
-    # Files to exclude (even if in included directories)
-    EXCLUDE_FILES = [
-        '__pycache__',
-        '.pyc',
-        '.git',
-        '.DS_Store',
-        'secrets.py',  # Don't sync secrets - must be created manually on Pico
-        'secrets-template.py',  # Template, not actual code
-    ]
+
+    INCLUDE_FILES: list = _PICO_FILES['include_files']
+    INCLUDE_DIRS: list = _PICO_FILES['include_dirs']
+    EXCLUDE_FILES: list = _PICO_FILES['exclude_patterns'] + ['.git', 'config.example.py', 'pico_files.json']
     
     def __init__(self, dry_run=False, force=False, verbose=False):
         self.dry_run = dry_run

@@ -1,0 +1,29 @@
+{
+  "include_files": [
+    "main.py",
+    "wifi.py",
+    "motor.py",
+    "motor2.py",
+    "motor3.py",
+    "servo.py",
+    "display.py",
+    "lights.py",
+    "icons.py",
+    "icons.json",
+    "vl53l0x_mp.py",
+    "config.py",
+    "config.example.py",
+    "pico_files.json"
+  ],
+  "include_dirs": [
+    "microdot",
+    "sensors"
+  ],
+  "exclude_patterns": [
+    "*.pyc",
+    "__pycache__",
+    ".DS_Store",
+    "secrets.py",
+    "secrets-template.py"
+  ]
+}

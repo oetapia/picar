@@ -64,7 +64,7 @@ NON_PRODUCTION_PATTERNS = {
     'utemplate/',
     'image_to_icon.py',
     'sync_branches.py',
-    'client/README.md',
+    '*.md',
 }
 
 

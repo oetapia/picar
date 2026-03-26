@@ -145,12 +145,6 @@ def cherry_pick_with_auto_resolve(commit_hash: str, auto_resolve: bool = False) 
     ])
     commit_msg = commit_msg.strip()
 
-    # Skip commits that contain no production files at all
-    files = get_commit_files(commit_hash)
-    if not any(not is_non_production_file(f) for f in files):
-        print(f"\n{Colors.YELLOW}⊘ Skipping (no production files): {commit_msg}{Colors.ENDC}")
-        return True
-
     print(f"\n{Colors.CYAN}📝 Cherry-picking commit {commit_hash}...{Colors.ENDC}")
     print(f"   Message: {commit_msg}")
 
@@ -344,8 +338,11 @@ Examples:
             print(f"{Colors.RED}✗ Failed to switch to production-pico{Colors.ENDC}")
             sys.exit(1)
 
-    # Cherry-pick all commits
+    # Cherry-pick all commits that have at least one production file
     for commit_hash in commits:
+        files = get_commit_files(commit_hash)
+        if not any(not is_non_production_file(f) for f in files):
+            continue  # nothing to apply to production-pico
         success = cherry_pick_with_auto_resolve(commit_hash, args.auto_resolve)
         if not success:
             print(f"\n{Colors.RED}{Colors.BOLD}✗ Sync failed at {commit_hash}{Colors.ENDC}")

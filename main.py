@@ -5,7 +5,7 @@ import uasyncio as asyncio
 from microdot import Microdot, Response
 
 import display
-import motor
+import motor3 as motor
 import servo
 import wifi
 import lights

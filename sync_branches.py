@@ -214,12 +214,19 @@ def cherry_pick_with_auto_resolve(commit_hash: str, auto_resolve: bool = False) 
         if code == 0:
             print(f"{Colors.GREEN}✓ Cherry-pick completed with auto-resolution{Colors.ENDC}")
             return True
-        else:
-            print(f"{Colors.RED}✗ Cherry-pick failed even after auto-resolution{Colors.ENDC}")
-            print(f"  stdout: {stdout.strip()}")
-            print(f"  stderr: {stderr.strip()}")
-            run_command(['git', 'cherry-pick', '--abort'], check=False)
-            return False
+
+        # Empty commit after resolution (all changes were non-production) — skip it
+        if 'nothing to commit' in stdout or 'nothing to commit' in stderr or \
+                'now empty' in stderr or 'now empty' in stdout:
+            run_command(['git', 'cherry-pick', '--skip'], check=False)
+            print(f"{Colors.YELLOW}⊘ Skipped (empty after removing non-production files){Colors.ENDC}")
+            return True
+
+        print(f"{Colors.RED}✗ Cherry-pick failed even after auto-resolution{Colors.ENDC}")
+        print(f"  stdout: {stdout.strip()}")
+        print(f"  stderr: {stderr.strip()}")
+        run_command(['git', 'cherry-pick', '--abort'], check=False)
+        return False
     
     print(f"{Colors.RED}✗ Cherry-pick failed{Colors.ENDC}")
     run_command(['git', 'cherry-pick', '--abort'], check=False)

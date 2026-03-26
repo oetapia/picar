@@ -27,6 +27,8 @@ PRODUCTION_FILES = {
     'main.py',
     'wifi.py',
     'motor.py',
+    'motor2.py',
+    'motor3.py',
     'servo.py',
     'display.py',
     'lights.py',

@@ -63,6 +63,7 @@ NON_PRODUCTION_PATTERNS = {
     'screen/',
     'utemplate/',
     'image_to_icon.py',
+    'sync_branches.py'
     'client/README.md',
 }
 

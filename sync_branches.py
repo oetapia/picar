@@ -82,12 +82,16 @@ class Colors:
 
 def run_command(cmd: List[str], check: bool = True) -> Tuple[int, str, str]:
     """Run a git command and return (returncode, stdout, stderr)"""
+    import os
+    env = os.environ.copy()
+    env['GIT_EDITOR'] = 'true'  # suppress editor prompts (e.g. cherry-pick --continue)
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            env=env,
         )
         if check and result.returncode != 0:
             print(f"{Colors.RED}✗ Command failed: {' '.join(cmd)}{Colors.ENDC}")
@@ -134,16 +138,22 @@ def get_commit_files(commit_hash: str) -> List[str]:
 
 def cherry_pick_with_auto_resolve(commit_hash: str, auto_resolve: bool = False) -> bool:
     """Cherry-pick a commit and auto-resolve conflicts"""
-    
-    print(f"\n{Colors.CYAN}📝 Cherry-picking commit {commit_hash}...{Colors.ENDC}")
-    
+
     # Get commit message
     code, commit_msg, _ = run_command([
         'git', 'log', '--format=%s', '-n', '1', commit_hash
     ])
     commit_msg = commit_msg.strip()
+
+    # Skip commits that contain no production files at all
+    files = get_commit_files(commit_hash)
+    if not any(not is_non_production_file(f) for f in files):
+        print(f"\n{Colors.YELLOW}⊘ Skipping (no production files): {commit_msg}{Colors.ENDC}")
+        return True
+
+    print(f"\n{Colors.CYAN}📝 Cherry-picking commit {commit_hash}...{Colors.ENDC}")
     print(f"   Message: {commit_msg}")
-    
+
     # Attempt cherry-pick
     code, stdout, stderr = run_command(['git', 'cherry-pick', commit_hash], check=False)
     

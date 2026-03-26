@@ -228,7 +228,16 @@ def cherry_pick_with_auto_resolve(commit_hash: str, auto_resolve: bool = False) 
         run_command(['git', 'cherry-pick', '--abort'], check=False)
         return False
     
+    # Already applied (empty result without explicit CONFLICT)
+    if 'nothing to commit' in stdout or 'nothing to commit' in stderr or \
+            'now empty' in stderr or 'now empty' in stdout:
+        run_command(['git', 'cherry-pick', '--skip'], check=False)
+        print(f"{Colors.YELLOW}⊘ Skipped (already applied){Colors.ENDC}")
+        return True
+
     print(f"{Colors.RED}✗ Cherry-pick failed{Colors.ENDC}")
+    print(f"  stdout: {stdout.strip()}")
+    print(f"  stderr: {stderr.strip()}")
     run_command(['git', 'cherry-pick', '--abort'], check=False)
     return False
 

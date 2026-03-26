@@ -63,7 +63,7 @@ NON_PRODUCTION_PATTERNS = {
     'screen/',
     'utemplate/',
     'image_to_icon.py',
-    'sync_branches.py'
+    'sync_branches.py',
     'client/README.md',
 }
 
@@ -247,51 +247,60 @@ Examples:
     
     print(f"{Colors.CYAN}Current branch: {current_branch}{Colors.ENDC}")
     
-    # Get commit to sync
+    # Get commits to sync
     if args.commit:
-        commit_hash = args.commit
+        commits = [args.commit]
     else:
-        # Get latest commit from main
-        code, stdout, _ = run_command(['git', 'rev-parse', 'main'])
-        commit_hash = stdout.strip()
-    
-    # Get commit info
-    code, commit_info, _ = run_command([
-        'git', 'log', '--format=%H %s', '-n', '1', commit_hash
-    ])
-    
-    if code != 0:
-        print(f"{Colors.RED}✗ Invalid commit: {commit_hash}{Colors.ENDC}")
-        sys.exit(1)
-    
-    print(f"{Colors.CYAN}Commit to sync: {commit_info.strip()}{Colors.ENDC}\n")
-    
-    # Get files in commit
-    files = get_commit_files(commit_hash)
-    
-    production_files = [f for f in files if not is_non_production_file(f)]
-    non_production_files = [f for f in files if is_non_production_file(f)]
-    
-    print(f"{Colors.GREEN}✓ Files that will be synced to production-pico:{Colors.ENDC}")
-    for f in production_files:
-        print(f"  • {f}")
-    
-    if non_production_files:
-        print(f"\n{Colors.YELLOW}⊘ Files that will be ignored (non-production):{Colors.ENDC}")
-        for f in non_production_files:
-            print(f"  • {f}")
-    
+        # Get all commits in main not yet in production-pico, oldest first
+        code, stdout, _ = run_command([
+            'git', 'log', 'production-pico..main', '--format=%H', '--reverse'
+        ])
+        if code != 0 or not stdout.strip():
+            print(f"{Colors.GREEN}✓ production-pico is already up to date with main{Colors.ENDC}")
+            sys.exit(0)
+        commits = [h for h in stdout.strip().split('\n') if h.strip()]
+
+    print(f"{Colors.CYAN}Commits to sync: {len(commits)}{Colors.ENDC}\n")
+
+    for commit_hash in commits:
+        # Get commit info
+        code, commit_info, _ = run_command([
+            'git', 'log', '--format=%H %s', '-n', '1', commit_hash
+        ])
+        if code != 0:
+            print(f"{Colors.RED}✗ Invalid commit: {commit_hash}{Colors.ENDC}")
+            sys.exit(1)
+
+        print(f"{Colors.CYAN}Commit: {commit_info.strip()}{Colors.ENDC}")
+
+        files = get_commit_files(commit_hash)
+        production_files = [f for f in files if not is_non_production_file(f)]
+        non_production_files = [f for f in files if is_non_production_file(f)]
+
+        if production_files:
+            print(f"{Colors.GREEN}  ✓ Will sync:{Colors.ENDC}")
+            for f in production_files:
+                print(f"    • {f}")
+        else:
+            print(f"  (no production files changed)")
+
+        if non_production_files:
+            print(f"{Colors.YELLOW}  ⊘ Will skip (non-production):{Colors.ENDC}")
+            for f in non_production_files:
+                print(f"    • {f}")
+        print()
+
     if args.dry_run:
-        print(f"\n{Colors.BLUE}ℹ Dry run mode - no changes made{Colors.ENDC}")
+        print(f"{Colors.BLUE}ℹ Dry run mode - no changes made{Colors.ENDC}")
         sys.exit(0)
-    
+
     # Confirm
     if not args.auto_resolve:
-        response = input(f"\n{Colors.BOLD}Proceed with sync? (y/N): {Colors.ENDC}")
+        response = input(f"{Colors.BOLD}Proceed with sync of {len(commits)} commit(s)? (y/N): {Colors.ENDC}")
         if response.lower() != 'y':
             print("Aborted.")
             sys.exit(0)
-    
+
     # Switch to production-pico if not already there
     if current_branch != 'production-pico':
         print(f"\n{Colors.CYAN}🔄 Switching to production-pico branch...{Colors.ENDC}")
@@ -299,22 +308,22 @@ Examples:
         if code != 0:
             print(f"{Colors.RED}✗ Failed to switch to production-pico{Colors.ENDC}")
             sys.exit(1)
-    
-    # Cherry-pick the commit
-    success = cherry_pick_with_auto_resolve(commit_hash, args.auto_resolve)
-    
-    if success:
-        print(f"\n{Colors.GREEN}{Colors.BOLD}✓ Sync completed successfully!{Colors.ENDC}")
-        print(f"\n{Colors.CYAN}Next steps:{Colors.ENDC}")
-        print(f"  1. Review changes: git log -1")
-        print(f"  2. Test the changes")
-        print(f"  3. Push: git push origin production-pico")
-        if current_branch != 'production-pico':
-            print(f"  4. Switch back: git checkout {current_branch}")
-    else:
-        print(f"\n{Colors.RED}{Colors.BOLD}✗ Sync failed{Colors.ENDC}")
-        print(f"{Colors.YELLOW}You may need to manually resolve conflicts.{Colors.ENDC}")
-        sys.exit(1)
+
+    # Cherry-pick all commits
+    for commit_hash in commits:
+        success = cherry_pick_with_auto_resolve(commit_hash, args.auto_resolve)
+        if not success:
+            print(f"\n{Colors.RED}{Colors.BOLD}✗ Sync failed at {commit_hash}{Colors.ENDC}")
+            print(f"{Colors.YELLOW}You may need to manually resolve conflicts.{Colors.ENDC}")
+            sys.exit(1)
+
+    print(f"\n{Colors.GREEN}{Colors.BOLD}✓ Sync completed successfully! ({len(commits)} commit(s)){Colors.ENDC}")
+    print(f"\n{Colors.CYAN}Next steps:{Colors.ENDC}")
+    print(f"  1. Review changes: git log --oneline -10")
+    print(f"  2. Test the changes")
+    print(f"  3. Push: git push origin production-pico")
+    if current_branch != 'production-pico':
+        print(f"  4. Switch back: git checkout {current_branch}")
 
 
 if __name__ == '__main__':

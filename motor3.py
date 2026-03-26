@@ -31,9 +31,9 @@ import display
 IN1 = machine.PWM(machine.Pin(17))
 IN2 = machine.PWM(machine.Pin(16))
 
-# 15 kHz PWM — good balance of torque + top speed (tested via motor_test2.py)
-IN1.freq(15000)
-IN2.freq(15000)
+# 20 kHz PWM — above audible range, well within DRV8871's 200 kHz max
+IN1.freq(20000)
+IN2.freq(20000)
 
 current_motor_speed = 0  # signed: + = forward, - = reverse
 
@@ -46,10 +46,11 @@ def update_motor():
         IN1.duty_u16(0)
         IN2.duty_u16(0)
     else:
-        # Duty cycle range tuned for 370 motor on 7.4 V @ 15 kHz
-        # Profile H from motor_test2.py — best torque + speed balance
-        min_duty = 35000
-        max_duty = 65535
+        # Duty cycle range tuned for 370 motor on 7.4 V
+        # min_duty keeps the motor from stalling at low speed inputs
+        # max_duty kept under full to avoid over-driving the 370
+        min_duty = 20000
+        max_duty = 55000
 
         direction = 1 if current_motor_speed > 0 else -1
         speed_input = abs(current_motor_speed)

@@ -7,6 +7,7 @@ from microdot import Microdot, Response
 import display
 import motor3 as motor
 import servo
+import gear
 import wifi
 import lights
 from sensors import accelerometer
@@ -24,6 +25,7 @@ led.off()
 motor.update_motor()
 servo.set_servo_angle(90)  # Center position
 servo.display_servo()
+gear.set_gear(False)  # Start with gear off
 
 # ========== WiFi Connection ==========
 wlan = wifi.connect_wifi()
@@ -158,6 +160,39 @@ def api_servo(request, angle):
         led.off()
     return create_cors_response(response_data)
 
+@app.route('/api/gear/<status>')
+def api_gear(request, status):
+    """Control low gear: on, off, or toggle."""
+    led.on()
+    try:
+        status = status.lower()
+        if status == 'on':
+            gear.set_gear(True)
+        elif status == 'off':
+            gear.set_gear(False)
+        elif status == 'toggle':
+            gear.toggle_gear()
+        else:
+            led.off()
+            return create_cors_response({
+                'success': False,
+                'message': f'Invalid status: {status}. Use: on, off, or toggle'
+            }, status_code=400)
+        state = "LOW" if gear.gear_on else "OFF"
+        _on_command(request, f"Gear: {state}")
+        response_data = {
+            'success': True,
+            'gear_on': gear.gear_on,
+            'message': f'Gear: {state}'
+        }
+        print(f"Gear set to {state}")
+    except Exception as e:
+        response_data = {'success': False, 'message': f'Gear error: {e}'}
+        print(f"Gear error: {e}")
+    finally:
+        led.off()
+    return create_cors_response(response_data)
+
 @app.route('/api/text', methods=['POST'])
 def api_text(request):
     led.on()
@@ -192,7 +227,8 @@ def api_status(request):
         'success': True,
         'motor_speed': motor.current_motor_speed,
         'servo_angle': servo.current_angle + 90,
-        'message': f'Motor: {motor.current_motor_speed}, Servo: {servo.current_angle + 90}°'
+        'gear_on': gear.gear_on,
+        'message': f'Motor: {motor.current_motor_speed}, Servo: {servo.current_angle + 90}°, Gear: {"LOW" if gear.gear_on else "OFF"}'
     }
     return create_cors_response(response_data)
 

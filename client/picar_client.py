@@ -16,7 +16,7 @@ except (ImportError, AttributeError):
     # Fallback to hardcoded IP if config.py not found
     print("⚠️  Warning: Could not import config.py, using default IP")
     print("   Create config.py from config.example.py template")
-    PICAR_IP = "192.168.178.30"
+    PICAR_IP = "192.168.178.59"
 
 BASE_URL = f"http://{PICAR_IP}:5000"
 

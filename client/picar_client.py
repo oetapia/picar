@@ -125,6 +125,23 @@ class PicarClient:
         """Turn on both front and back lights."""
         return self.set_lights("both")
 
+    # ========== Gear Control ==========
+    def set_gear(self, on: bool) -> dict:
+        """Engage (True) or disengage (False) low gear."""
+        return self._get(f"/api/gear/{'on' if on else 'off'}")
+
+    def gear_on(self) -> dict:
+        """Engage low gear."""
+        return self.set_gear(True)
+
+    def gear_off(self) -> dict:
+        """Disengage gear."""
+        return self.set_gear(False)
+
+    def toggle_gear(self) -> dict:
+        """Toggle gear state."""
+        return self._get("/api/gear/toggle")
+
     # ========== Sensors ==========
     def get_sensors(self) -> dict:
         """
@@ -321,7 +338,8 @@ def main():
     print(f"Connecting to Picar at {BASE_URL}...")
     try:
         s = client.status()
-        print(f"✓ Connected. Motor: {s['motor_speed']}, Servo: {s['servo_angle']}°")
+        gear_str = "LOW" if s.get('gear_on') else "OFF"
+        print(f"✓ Connected. Motor: {s['motor_speed']}, Servo: {s['servo_angle']}°, Gear: {gear_str}")
     except requests.exceptions.ConnectionError:
         print(f"✗ Could not connect to {BASE_URL}. Is the Pico running?")
         return
@@ -341,6 +359,9 @@ def main():
         "l": ("Lights both",       lambda: client.lights_both()),
         "o": ("Lights off",        lambda: client.lights_off()),
         "t": ("Toggle auto lights", lambda: toggle_auto_lights()),
+
+        # Gear
+        "g": ("Toggle gear",       lambda: client.toggle_gear()),
         
         # Status & Sensors
         "?": ("Status",            lambda: client.status()),
@@ -373,6 +394,9 @@ def main():
     print("  L         — Both lights ON")
     print("  O         — Lights OFF")
     print(f"  T         — Toggle auto lights [Currently: {'ON' if client.auto_lights else 'OFF'}]")
+
+    print("\nGear Control:")
+    print("  G         — Toggle low gear (on/off)")
     
     print("\nSensor Information:")
     print("  1         — Accelerometer (MPU-6050: tilt, orientation)")

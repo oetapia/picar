@@ -59,7 +59,7 @@ def update_motor():
         normalized_smooth = math.sqrt(normalized_linear) if normalized_linear > 0 else 0
         speed_value = int(min_duty + normalized_smooth * (max_duty - min_duty))
 
-        if direction > 0:
+        if direction < 0:
             # Forward: PWM on IN1, IN2 held LOW
             IN1.duty_u16(speed_value)
             IN2.duty_u16(0)

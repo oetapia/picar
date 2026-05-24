@@ -342,7 +342,8 @@
                     <kbd>F</kbd> Front lights &nbsp;
                     <kbd>B</kbd> Back lights &nbsp;
                     <kbd>L</kbd> Both &nbsp;
-                    <kbd>O</kbd> Lights off<br>
+                    <kbd>O</kbd> Lights off &nbsp;
+                    <kbd>G</kbd> Toggle gear<br>
                     <kbd>1</kbd> Accel &nbsp;
                     <kbd>2</kbd> ToF &nbsp;
                     <kbd>3</kbd> Ultrasonic &nbsp;
@@ -393,6 +394,20 @@
                 <button class="stop-btn" onclick="emergencyStop()">🛑 Emergency Stop</button>
             </div>
             
+            <!-- Gear Control -->
+            <div class="control">
+                <h3>⚙️ Gear</h3>
+                <div class="light-buttons">
+                    <button class="light-btn" id="btnGearOn" onclick="setGear('on')">🟢 Low ON</button>
+                    <button class="light-off-btn" id="btnGearOff" onclick="setGear('off')">⬛ OFF</button>
+                </div>
+                <div class="light-status-indicator">
+                    <span style="font-weight:bold; color:#495057;">State:</span>
+                    <span class="light-dot" id="gearDot"></span>
+                    <span style="margin-left:auto; color:#6c757d; font-size:14px;" id="gearStatusText">off</span>
+                </div>
+            </div>
+
             <!-- Lights Control -->
             <div class="control">
                 <h3>💡 Lights Control</h3>
@@ -541,6 +556,32 @@
             document.getElementById('motorSlider').value = 0;
             updateMotorDisplay(0);
             updateStatus('Emergency stop activated!', true);
+        }
+
+        // ══════════════════════════════════════════════════════
+        //  GEAR  (matches picar_client.py)
+        // ══════════════════════════════════════════════════════
+        function setGear(status) {
+            fetch(`${PICO}/api/gear/${status}`)
+                .then(r => r.json())
+                .then(data => {
+                    updateStatus(data.message || `Gear: ${status}`, data.success);
+                    updateGearUI(data);
+                })
+                .catch(() => updateStatus('Gear command failed', false));
+        }
+
+        function toggleGear() {
+            setGear('toggle');
+        }
+
+        function updateGearUI(data) {
+            if (!data) return;
+            const on = data.gear_on === true;
+            document.getElementById('gearDot').className = 'light-dot' + (on ? ' on' : '');
+            document.getElementById('gearStatusText').textContent = on ? 'low' : 'off';
+            document.getElementById('btnGearOn').classList.toggle('active', on);
+            document.getElementById('btnGearOff').classList.toggle('active', !on);
         }
 
         // ══════════════════════════════════════════════════════
@@ -750,7 +791,7 @@
             const key = e.key.toLowerCase();
 
             // Prevent default for keys we handle
-            if (['w','s','a','d','c',' ','f','b','l','o','t','1','2','3','4','5'].includes(key)) {
+            if (['w','s','a','d','c',' ','f','b','l','o','t','g','1','2','3','4','5'].includes(key)) {
                 e.preventDefault();
             }
 
@@ -775,6 +816,8 @@
                     document.getElementById('autoLightToggle').checked = !autoLights;
                     toggleAutoLights();
                     break;
+                // Gear
+                case 'g': toggleGear(); break;
                 // Sensors
                 case '1': fetchSensor('accelerometer'); break;
                 case '2': fetchSensor('tof');           break;
@@ -803,6 +846,8 @@
         loadIcons();
         // Initial lights status
         fetch(`${PICO}/api/lights`).then(r => r.json()).then(updateLightUI).catch(() => {});
+        // Initial gear status (from /api/status, which includes gear_on)
+        fetch(`${PICO}/api/status`).then(r => r.json()).then(updateGearUI).catch(() => {});
     </script>
 </body>
 </html>

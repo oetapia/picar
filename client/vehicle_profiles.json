@@ -37,6 +37,13 @@
       "max_incline_boost": 15,
       "downhill_reduction": 10,
       "lateral_tilt_limit": 25.0
+    },
+    "gear": {
+      "low_gear_upper": 25,
+      "low_gear_lower": 10,
+      "engage_on_incline": true,
+      "incline_gear_threshold": 5.0,
+      "change_cooldown_s": 0.8
     }
   },
   "dual_motor": {
@@ -77,6 +84,13 @@
       "max_incline_boost": 15,
       "downhill_reduction": 10,
       "lateral_tilt_limit": 25.0
+    },
+    "gear": {
+      "low_gear_upper": 25,
+      "low_gear_lower": 10,
+      "engage_on_incline": true,
+      "incline_gear_threshold": 5.0,
+      "change_cooldown_s": 0.8
     }
   }
 }

@@ -144,6 +144,9 @@ class AutonomousFSM:
         self._last_measurement_time: Optional[float] = None
         self._display_update_counter = 0
 
+        # ── Gear management ──────────────────────────────────────
+        self._gear_manager = hooks.GearManager(client)
+
         # ── Watchdog / staleness ─────────────────────────────────
         self._state_enter_time: float = time.time()
         self._last_sensor_time: float = time.time()
@@ -203,6 +206,7 @@ class AutonomousFSM:
             self._current_direction = "stopped"
             self._current_motor_pct = 0
         hooks.execute_stop(self.client)
+        self._gear_manager.disengage_if_needed()
         self.state = NavigationState.STOPPED
 
         try:
@@ -556,11 +560,23 @@ class AutonomousFSM:
 
     def _handle_forward_perception(self, state, left: float, right: float,
                                    target_speed: int, mode: str):
-        """Handle forward movement with acceleration smoothing, speed-dependent steering, and terrain compensation."""
+        """Handle forward movement with acceleration smoothing, speed-dependent steering, terrain compensation, and low gear."""
         # Smooth speed ramp
         smoothed = hooks.smooth_speed(self._current_motor_pct, target_speed)
         # Terrain-aware speed adjustment (uphill boost / downhill reduction)
         smoothed = hooks.adjust_speed_for_terrain(smoothed, state)
+
+        # ── Low gear management ──────────────────────────────────
+        # Gear change requires motor stop first; if a change occurred
+        # the motor is now at 0 — skip driving this tick and let the
+        # next iteration resume with the new gear engaged.
+        gear_changed = self._gear_manager.update(smoothed, state.terrain_incline)
+        if gear_changed:
+            with self._lock:
+                self._current_motor_pct = 0
+                self._current_direction = "stopped"
+            return  # motor was stopped for gear change; resume next tick
+
         # Speed-dependent steering
         servo, steer_label = hooks.calculate_steering_with_speed(left, right, smoothed)
         self.client.set_servo(servo)
@@ -569,22 +585,35 @@ class AutonomousFSM:
             self._current_direction = "forward"
             self._current_motor_pct = smoothed
         terrain_tag = hooks.format_terrain_status(state)
+        gear_tag = "⚙LOW" if self._gear_manager.engaged else ""
         status = hooks.format_console_status(mode, steer_label, left, right, smoothed)
+        if gear_tag:
+            status += f" {gear_tag}"
         if terrain_tag:
             status += f" {terrain_tag}"
         print(f"\r{status}", end="", flush=True)
 
     def _handle_reverse_perception(self, state, left: float, right: float):
-        """Handle tactical reverse with smoothing."""
+        """Handle tactical reverse with smoothing and low gear."""
         target = hooks.REVERSE_SLOW
         smoothed = hooks.smooth_speed(self._current_motor_pct, target)
+
+        # ── Low gear management (reverse uses abs speed for decision) ──
+        gear_changed = self._gear_manager.update(smoothed, state.terrain_incline)
+        if gear_changed:
+            with self._lock:
+                self._current_motor_pct = 0
+                self._current_direction = "stopped"
+            return  # motor was stopped for gear change; resume next tick
+
         hooks.execute_reverse(self.client, smoothed, left, right, state.rear_clearance)
         with self._lock:
             self._current_direction = "backward"
             self._current_motor_pct = smoothed
         servo, steer_label = hooks.calculate_reverse_steering(left, right)
+        gear_tag = " ⚙LOW" if self._gear_manager.engaged else ""
         status = hooks.format_reverse_status(steer_label, state.rear_clearance, smoothed)
-        print(f"\r{status}", end="", flush=True)
+        print(f"\r{status}{gear_tag}", end="", flush=True)
     
     # ═══════════════════════════════════════════════════════════════
     # STATE TRANSITIONS (validated)
@@ -746,6 +775,9 @@ def main():
     print(f"  ✓ Terrain-aware speed (uphill boost ≤{hooks.MAX_INCLINE_BOOST}%, "
           f"steep limit {hooks.STEEP_INCLINE_LIMIT:.0f}°, "
           f"tilt limit {hooks.LATERAL_TILT_LIMIT:.0f}°)")
+    print(f"  ✓ Low gear auto-engage ({hooks.LOW_GEAR_LOWER}%-{hooks.LOW_GEAR_UPPER}% "
+          f"or incline ≥{hooks.GEAR_INCLINE_THRESH:.0f}°, "
+          f"cooldown {hooks.GEAR_CHANGE_COOLDOWN:.1f}s)")
     print()
     
     logging.basicConfig(

@@ -350,6 +350,14 @@ MAX_INCLINE_BOOST   = _terrain.get("max_incline_boost", 15)
 DOWNHILL_REDUCTION  = _terrain.get("downhill_reduction", 10)
 LATERAL_TILT_LIMIT  = _terrain.get("lateral_tilt_limit", 25.0)
 
+# ── Gear parameters (from profile) ──────────────────────────────
+_gear = _PROFILE.get("gear", {})
+LOW_GEAR_UPPER       = _gear.get("low_gear_upper", 25)      # engage at or below this motor-%
+LOW_GEAR_LOWER       = _gear.get("low_gear_lower", 10)      # below this car doesn't move
+GEAR_ON_INCLINE      = _gear.get("engage_on_incline", True)  # engage on incline regardless
+GEAR_INCLINE_THRESH  = _gear.get("incline_gear_threshold", 5.0)
+GEAR_CHANGE_COOLDOWN = _gear.get("change_cooldown_s", 0.8)   # min time between gear changes
+
 # ── Log computed thresholds so operators can verify ──────────────
 log.info("Profile '%s' — speeds: cruise=%d%% (%.1f cm/s)  cautious=%d%%  "
          "minimum=%d%%  dead_zone=%d%%",
@@ -1109,6 +1117,122 @@ def format_terrain_status(perception_state: PerceptionState) -> str:
         parts.append(f"Roll:{roll:+.0f}°")
 
     return " ".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LOW GEAR MANAGEMENT HOOKS
+# ═══════════════════════════════════════════════════════════════════
+
+import time as _time  # local alias to avoid shadowing
+
+
+class GearManager:
+    """
+    Manages low-gear engagement with safe motor-stop-first protocol.
+
+    The physical gear servo requires the motor to be stopped before
+    engaging or disengaging.  This class encapsulates:
+    - Decision logic (speed zone + incline)
+    - Cooldown enforcement (avoid gear chatter)
+    - Motor-stop-first sequence
+
+    Usage (in FSM):
+        gear_mgr = GearManager(client)
+        # each control loop tick:
+        gear_mgr.update(current_motor_pct, incline_deg)
+    """
+
+    def __init__(self, client: PicarClient):
+        self.client = client
+        self._engaged: bool = False
+        self._last_change_time: float = 0.0
+
+    @property
+    def engaged(self) -> bool:
+        """Current gear state."""
+        return self._engaged
+
+    def should_engage(self, motor_pct: int, incline_deg: float = 0.0) -> bool:
+        """
+        Determine if low gear should be engaged.
+
+        Rules:
+        - Speed 10%-25% (LOW_GEAR_LOWER < |motor_pct| <= LOW_GEAR_UPPER): engage
+        - Below 10%: car doesn't move, gear state doesn't matter
+        - Above 25%: disengage (normal/high speed operation)
+        - On incline (>= GEAR_INCLINE_THRESH): engage regardless of speed
+          (provides mechanical torque advantage on slopes)
+        """
+        abs_speed = abs(motor_pct)
+
+        # On incline → always engage (if car is actually moving)
+        if GEAR_ON_INCLINE and abs(incline_deg) >= GEAR_INCLINE_THRESH:
+            return abs_speed > LOW_GEAR_LOWER
+
+        # Speed-based decision
+        if abs_speed <= LOW_GEAR_LOWER:
+            # Below movement threshold — gear irrelevant, keep current
+            return self._engaged
+        if abs_speed <= LOW_GEAR_UPPER:
+            # Low speed zone — engage for torque
+            return True
+
+        # Above LOW_GEAR_UPPER — disengage
+        return False
+
+    def _cooldown_ok(self) -> bool:
+        """Check if enough time has passed since last gear change."""
+        return (_time.time() - self._last_change_time) >= GEAR_CHANGE_COOLDOWN
+
+    def update(self, motor_pct: int, incline_deg: float = 0.0) -> bool:
+        """
+        Evaluate and execute gear change if needed.
+
+        Sequence when changing gear:
+        1. Stop motor (required by hardware)
+        2. Engage/disengage gear servo
+        3. Motor will be restarted by the caller on next tick
+
+        Args:
+            motor_pct:   Current/target motor percentage.
+            incline_deg: Current pitch angle (positive = uphill).
+
+        Returns:
+            True if a gear change was executed (motor was stopped),
+            False if no change occurred.
+        """
+        target = self.should_engage(motor_pct, incline_deg)
+
+        if target == self._engaged:
+            return False  # no change needed
+
+        if not self._cooldown_ok():
+            log.debug("Gear change suppressed — cooldown (%.1fs remaining)",
+                      GEAR_CHANGE_COOLDOWN - (_time.time() - self._last_change_time))
+            return False
+
+        # ── Execute gear change sequence ─────────────────────────
+        # Step 1: Stop motor first (hardware requirement)
+        self.client.stop()
+
+        # Step 2: Change gear
+        self.client.set_gear(target)
+        self._engaged = target
+        self._last_change_time = _time.time()
+
+        state_str = "ENGAGED" if target else "DISENGAGED"
+        log.info("⚙ Gear %s (motor_pct=%d%%, incline=%.0f°)",
+                 state_str, motor_pct, incline_deg)
+
+        return True  # signal to caller: motor was stopped
+
+    def disengage_if_needed(self) -> None:
+        """Disengage gear (e.g. on autonomous stop). No cooldown check."""
+        if self._engaged:
+            self.client.set_gear(False)
+            self._engaged = False
+            self._last_change_time = _time.time()
+            log.info("⚙ Gear DISENGAGED (shutdown)")
 
 
 # ═══════════════════════════════════════════════════════════════════

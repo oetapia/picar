@@ -333,6 +333,32 @@ def format_lights(data):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Picar remote control")
+    parser.add_argument("--speed", type=int, default=75,
+                        help="Forward/reverse motor speed magnitude (0-100, default 75)")
+    parser.add_argument("--left-angle", type=int, default=45,
+                        help="Servo angle for left steering (0-180, default 45)")
+    parser.add_argument("--right-angle", type=int, default=135,
+                        help="Servo angle for right steering (0-180, default 135)")
+    args = parser.parse_args()
+
+    state = {
+        'speed': max(0, min(100, args.speed)),
+        'left_angle': max(0, min(180, args.left_angle)),
+        'right_angle': max(0, min(180, args.right_angle)),
+    }
+
+    def adjust_speed(delta):
+        state['speed'] = max(0, min(100, state['speed'] + delta))
+        return {"message": f"Speed: ±{state['speed']}"}
+
+    def adjust_steering(delta):
+        # delta > 0 = more aggressive steering (angles further from 90°)
+        state['left_angle'] = max(0, min(90, state['left_angle'] - delta))
+        state['right_angle'] = min(180, max(90, state['right_angle'] + delta))
+        return {"message": f"Steering: L={state['left_angle']}° R={state['right_angle']}°"}
+
     client = PicarClient()
 
     print(f"Connecting to Picar at {BASE_URL}...")
@@ -346,12 +372,19 @@ def main():
 
     commands = {
         # Movement
-        "w": ("Forward",           lambda: client.set_motor(75)),
-        "s": ("Reverse",           lambda: client.set_motor(-75)),
-        "a": ("Left",              lambda: client.set_servo(45)),
-        "d": ("Right",             lambda: client.set_servo(135)),
+        "w": ("Forward",           lambda: client.set_motor(state['speed'])),
+        "s": ("Reverse",           lambda: client.set_motor(-state['speed'])),
+        "a": ("Left",              lambda: client.set_servo(state['left_angle'])),
+        "d": ("Right",             lambda: client.set_servo(state['right_angle'])),
         "c": ("Centre servo",      lambda: client.centre()),
         " ": ("Stop",              lambda: client.stop()),
+
+        # Tuning
+        "+": ("Speed +5",          lambda: adjust_speed(5)),
+        "=": ("Speed +5",          lambda: adjust_speed(5)),
+        "-": ("Speed -5",          lambda: adjust_speed(-5)),
+        "]": ("Steering +5°",      lambda: adjust_steering(5)),
+        "[": ("Steering -5°",      lambda: adjust_steering(-5)),
         
         # Lights
         "f": ("Lights front",      lambda: client.lights_front()),
@@ -383,10 +416,12 @@ def main():
     print("PICAR REMOTE CONTROL")
     print("="*70)
     print("\nMovement Controls:")
-    print("  W/S       — Forward / Reverse")
-    print("  A/D       — Steer Left / Right")
+    print(f"  W/S       — Forward / Reverse (speed: ±{state['speed']})")
+    print(f"  A/D       — Steer Left ({state['left_angle']}°) / Right ({state['right_angle']}°)")
     print("  C         — Centre steering")
     print("  SPACE     — Stop")
+    print("  +/-       — Adjust speed by 5")
+    print("  [ / ]     — Adjust steering deflection by 5°")
     
     print("\nLights Controls:")
     print("  F         — Front lights ON")
@@ -443,12 +478,12 @@ def main():
                 elif key == "3":
                     print(f"\r{format_ultrasonic(result)}")
                 elif key == "4":
-                    # All sensors - multi-line output
-                    print("\r\n" + "="*70)
-                    print(format_accelerometer(result.get('accelerometer', {})))
-                    print(format_tof(result.get('tof', {})))
-                    print(format_ultrasonic(result.get('ultrasonic', {})))
-                    print("="*70)
+                    # All sensors - multi-line output (raw mode needs \r\n)
+                    print("\r\n" + "="*70, end="\r\n")
+                    print(format_accelerometer(result.get('accelerometer', {})), end="\r\n")
+                    print(format_tof(result.get('tof', {})), end="\r\n")
+                    print(format_ultrasonic(result.get('ultrasonic', {})), end="\r\n")
+                    print("="*70, end="\r\n")
                 elif key == "5":
                     print(f"\r{format_lights(result)}")
                 elif key == "t":

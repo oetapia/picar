@@ -279,12 +279,13 @@ CRAWL_SPEED  = MINIMUM_SPEED           # dual motor: distinct from SLOW thanks t
 REVERSE_FAST = _motor.get("reverse_fast", -60)
 REVERSE_SLOW = _motor.get("reverse_slow", -25)
 
-# Steering angles (hardware — same for all profiles)
-STEER_LEFT = 35
-STEER_SLIGHT_LEFT = 65
-STEER_RIGHT = 145
-STEER_SLIGHT_RIGHT = 115
-CENTRE = 90
+# Steering angles (loaded from profile — hardware-dependent)
+_steering = _PROFILE.get("steering", {})
+STEER_LEFT = _steering.get("full_left", 50)
+STEER_SLIGHT_LEFT = _steering.get("slight_left", 70)
+CENTRE = _steering.get("centre", 90)
+STEER_SLIGHT_RIGHT = _steering.get("slight_right", 110)
+STEER_RIGHT = _steering.get("full_right", 130)
 
 # ── Physics-derived distance thresholds (cm) ─────────────────────
 # Each threshold = stopping-distance for that speed band, rounded up

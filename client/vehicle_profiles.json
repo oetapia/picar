@@ -45,6 +45,13 @@
       "engage_on_incline": true,
       "incline_gear_threshold": 5.0,
       "change_cooldown_s": 1.0
+    },
+    "steering": {
+      "full_left": 50,
+      "slight_left": 70,
+      "centre": 90,
+      "slight_right": 110,
+      "full_right": 130
     }
   },
   "single_motor_legacy": {

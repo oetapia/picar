@@ -47,9 +47,10 @@ if not log.handlers:
 
 # ── Active profile ───────────────────────────────────────────────
 # Change this string to switch between motor configurations:
-#   "single_motor"  — original fast single-motor (motor.py)
-#   "dual_motor"    — slower dual-motor setup (motor2.py)
-ACTIVE_PROFILE = "dual_motor"
+#   "drv8871_geared" — DRV8871 single motor + two gears + drivetrain (current hardware)
+#   "single_motor_legacy" — old TB6612FNG single motor (motor.py)
+#   "dual_motor_legacy"   — old dual motor (motor2.py)
+ACTIVE_PROFILE = "drv8871_geared"
 
 _PROFILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "vehicle_profiles.json")
@@ -340,7 +341,7 @@ STATE_TIMEOUT = {
 }
 
 # ── Acceleration smoothing ───────────────────────────────────────
-MAX_SPEED_STEP = 5   # max motor-% change per control loop iteration
+MAX_SPEED_STEP = 15  # max motor-% change per control loop iteration
 
 # ── Terrain / incline parameters (from profile) ──────────────────
 _terrain = _PROFILE.get("terrain", {})
@@ -417,27 +418,35 @@ class NavigationAction:
 # PERCEPTION-POWERED SENSOR READING HOOKS
 # ═══════════════════════════════════════════════════════════════════
 
-def read_perception_state(client: PicarClient) -> Optional[PerceptionState]:
+def read_perception_state(client) -> Optional[PerceptionState]:
     """
     Read all sensors and return fused perception state.
-    
+
+    Supports both PicarClient (REST, 4 round-trips) and PicarWsClientSync
+    (WebSocket, 1 round-trip via get_sensors()).
+
     Uses PerceptionSystem for:
     - Sensor fusion with confidence weighting
     - IMU integration for motion validation
     - Obstacle tracking with velocity
     - Sensor health monitoring
-    
+
     Returns:
         PerceptionState with fused sensor data, or None if critical sensors unavailable
     """
+    # ── Fast path: WS client returns all sensors in one call ─────
+    if hasattr(client, 'get_sensors') and hasattr(client, '_async_client'):
+        return _read_perception_ws(client)
+
+    # ── Legacy path: REST client, multiple round-trips ───────────
     # Read ToF sensors
     left, right, tof_success = read_tof_sensors(client)
     if not tof_success:
         return None
-    
+
     # Read ultrasonic
     rear, _ = read_ultrasonic_sensor(client)
-    
+
     # Read IMU with motor speed for motion validation
     try:
         status = client.status()
@@ -446,8 +455,40 @@ def read_perception_state(client: PicarClient) -> Optional[PerceptionState]:
         imu_data = parse_imu_state(imu_state, motor_speed)
     except Exception:
         imu_data = None
-    
+
     # Fuse sensors using perception system
+    perception = get_perception_system()
+    return perception.fuse_sensors(left, right, rear, imu_data)
+
+
+def _read_perception_ws(client) -> Optional[PerceptionState]:
+    """
+    Fast WS path: single get_sensors() call returns ToF + ultrasonic + accel.
+    Cuts 4 round-trips down to 1.
+    """
+    sensors = client.get_sensors()
+    if not sensors or 'error' in sensors:
+        return None
+
+    # Extract ToF (critical — fail if unavailable)
+    tof = sensors.get('tof')
+    if not tof:
+        return None
+    left = tof.get('l') or 999
+    right = tof.get('r') or 999
+
+    # Extract ultrasonic (non-critical — default to clear)
+    ultra = sensors.get('ultra')
+    if ultra:
+        rear = ultra.get('d') or 999
+    else:
+        rear = 999
+
+    # IMU — WS compact format only has pitch/roll/orientation,
+    # not full accel/gyro axes. Pass None; perception handles it.
+    imu_data = None
+
+    # Fuse sensors
     perception = get_perception_system()
     return perception.fuse_sensors(left, right, rear, imu_data)
 

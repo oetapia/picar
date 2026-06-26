@@ -360,6 +360,13 @@ class PicarWsClient:
             }
         return {"success": False, "message": "Ultrasonic not available"}
 
+    async def get_imu(self) -> dict:
+        """Get full IMU data (accel + gyro + tilt) for crash detection."""
+        result = await self._send_command({"c": "imu"})
+        if result.get("ok") and result.get("imu"):
+            return result["imu"]
+        return {"error": result.get("e", "unavailable")}
+
     async def get_proximity_guard(self) -> dict:
         """Get proximity guard status."""
         return await self._send_command({"c": "pg"})
@@ -512,6 +519,10 @@ class PicarWsClientSync:
 
     def get_accelerometer(self) -> dict:
         return self._call(self._async_client.get_accelerometer())
+
+    def get_imu(self) -> dict:
+        """Get full IMU data for crash/stall detection."""
+        return self._call(self._async_client.get_imu())
 
     def get_tof(self) -> dict:
         return self._call(self._async_client.get_tof())

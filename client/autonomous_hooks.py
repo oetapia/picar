@@ -1295,3 +1295,122 @@ def format_reverse_status(steer_label: str,
                          speed: int) -> str:
     """Format reverse status for console output."""
     return f"🔵 REVERSE {steer_label} Rear:{rear_dist:.0f}cm [{speed}%]"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CRASH / STALL DETECTION
+# ═══════════════════════════════════════════════════════════════════
+
+IMPACT_THRESHOLD_G = 1.2
+STALL_TIME_S = 0.4
+STALL_ACCEL_THRESHOLD_G = 0.08
+STUCK_DISTANCE_TOLERANCE_CM = 2.0
+STUCK_TIME_S = 0.6
+REVERSE_AFTER_CRASH_MS = 300
+
+
+class CrashMonitor:
+    """
+    Detects impacts, stalls, and stuck conditions using IMU + distance.
+
+    Runs every FSM tick. When a crash event is detected, returns an action
+    the FSM should take (brake + reverse).
+
+    Requires a WS client with get_imu() support.
+    """
+
+    def __init__(self):
+        self.enabled = False
+        self._motor_on_since: Optional[float] = None
+        self._last_front_dist: Optional[float] = None
+        self._dist_unchanged_since: Optional[float] = None
+        self._last_event_time: float = 0
+        self._cooldown_s = 2.0
+
+    def toggle(self) -> bool:
+        self.enabled = not self.enabled
+        if not self.enabled:
+            self._reset()
+        return self.enabled
+
+    def _reset(self):
+        self._motor_on_since = None
+        self._last_front_dist = None
+        self._dist_unchanged_since = None
+
+    def check(self, client, motor_pct: int, direction: str,
+              front_dist: float) -> Optional[str]:
+        """
+        Check for crash/stall conditions.
+
+        Args:
+            client: WS client with get_imu()
+            motor_pct: current motor percentage (abs value)
+            direction: "forward", "backward", or "stopped"
+            front_dist: current front clearance in cm
+
+        Returns:
+            "impact", "stall", or "stuck" if detected, None otherwise.
+        """
+        if not self.enabled:
+            return None
+        if direction == "stopped" or abs(motor_pct) < MOTOR_DEADZONE:
+            self._motor_on_since = None
+            self._dist_unchanged_since = None
+            return None
+
+        now = _time.time()
+
+        # Cooldown — don't fire repeatedly
+        if now - self._last_event_time < self._cooldown_s:
+            return None
+
+        # Track motor-on time
+        if self._motor_on_since is None:
+            self._motor_on_since = now
+
+        # ── 1. Impact detection (IMU spike) ──────────────────────
+        imu = None
+        if hasattr(client, 'get_imu'):
+            try:
+                imu = client.get_imu()
+            except Exception:
+                pass
+
+        if imu and 'error' not in imu:
+            ax = abs(imu.get('ax', 0))
+            ay = abs(imu.get('ay', 0))
+            # Check for sudden spike on either forward or lateral axis
+            if ax > IMPACT_THRESHOLD_G or ay > IMPACT_THRESHOLD_G:
+                self._last_event_time = now
+                self._reset()
+                log.warning("CRASH IMPACT detected: ax=%.2fg ay=%.2fg", ax, ay)
+                return "impact"
+
+            # ── 2. Stall detection (motor on, no acceleration) ───
+            motor_on_duration = now - self._motor_on_since
+            if motor_on_duration > STALL_TIME_S:
+                # If accel is near zero despite motor running → stalled
+                if ax < STALL_ACCEL_THRESHOLD_G and ay < STALL_ACCEL_THRESHOLD_G:
+                    self._last_event_time = now
+                    self._reset()
+                    log.warning("STALL detected: motor at %d%% but no motion (%.0fms)",
+                                motor_pct, motor_on_duration * 1000)
+                    return "stall"
+
+        # ── 3. Stuck detection (distance not changing) ───────────
+        if self._last_front_dist is not None:
+            if abs(front_dist - self._last_front_dist) < STUCK_DISTANCE_TOLERANCE_CM:
+                if self._dist_unchanged_since is None:
+                    self._dist_unchanged_since = now
+                elif now - self._dist_unchanged_since > STUCK_TIME_S:
+                    self._last_event_time = now
+                    self._reset()
+                    log.warning("STUCK detected: front=%.0fcm unchanged for %.0fms",
+                                front_dist, (now - self._dist_unchanged_since) * 1000)
+                    return "stuck"
+            else:
+                self._dist_unchanged_since = None
+
+        self._last_front_dist = front_dist
+        return None

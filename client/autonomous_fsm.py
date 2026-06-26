@@ -153,6 +153,9 @@ class AutonomousFSM:
         self._last_sensor_time: float = time.time()
         self._stuck_counter: int = 0         # escalation counter
 
+        # ── Crash / stall monitor ────────────────────────────────
+        self._crash_monitor = hooks.CrashMonitor()
+
         # ── Background thread ────────────────────────────────────
         self._thread: Optional[threading.Thread] = None
 
@@ -291,6 +294,18 @@ class AutonomousFSM:
                         self._current_motor_pct = 0
                     self._transition_to(NavigationState.EMERGENCY_STOP)
                     self._update_display_throttled_perception(perception_state)
+                    self._maintain_poll_rate(loop_start)
+                    continue
+
+                # ═══ PRIORITY 0c: CRASH / STALL DETECTION ═══
+                crash_event = self._crash_monitor.check(
+                    self.client,
+                    abs(self._current_motor_pct),
+                    self._current_direction,
+                    perception_state.front_clearance
+                )
+                if crash_event:
+                    self._handle_crash_event(crash_event, perception_state)
                     self._maintain_poll_rate(loop_start)
                     continue
 
@@ -682,9 +697,48 @@ class AutonomousFSM:
             self._transition_to(NavigationState.RECOVERY)
     
     # ═══════════════════════════════════════════════════════════════
+    # CRASH / STALL RESPONSE
+    # ═══════════════════════════════════════════════════════════════
+
+    def _handle_crash_event(self, event: str, perception_state):
+        """
+        Respond to a crash/stall/stuck event.
+
+        Immediate brake, then short reverse to disengage from obstacle.
+        """
+        # Immediate stop
+        if hasattr(self.client, 'brake'):
+            self.client.brake()
+        else:
+            hooks.execute_stop(self.client)
+
+        with self._lock:
+            self._current_direction = "stopped"
+            self._current_motor_pct = 0
+
+        log.warning("CRASH RESPONSE [%s] — braking + reversing", event)
+
+        # Brief reverse to pull away
+        rear_clear = perception_state.rear_clearance
+        if rear_clear > hooks.EMERGENCY_STOP_DIST:
+            time.sleep(0.05)
+            self.client.set_motor(hooks.REVERSE_SLOW)
+            with self._lock:
+                self._current_direction = "backward"
+                self._current_motor_pct = hooks.REVERSE_SLOW
+            time.sleep(hooks.REVERSE_AFTER_CRASH_MS / 1000.0)
+            hooks.execute_stop(self.client)
+            with self._lock:
+                self._current_direction = "stopped"
+                self._current_motor_pct = 0
+
+        self._transition_to(NavigationState.RECOVERY)
+        self._update_display_throttled_perception(perception_state)
+
+    # ═══════════════════════════════════════════════════════════════
     # DISPLAY AND TIMING
     # ═══════════════════════════════════════════════════════════════
-    
+
     def _update_display_throttled_perception(self, state):
         """Update OLED display with perception data."""
         self._display_update_counter += 1
@@ -771,6 +825,7 @@ def main():
     print("\nControls:")
     print("  G       — Start FSM autonomous mode")
     print("  SPACE   — Stop (exit autonomous mode)")
+    print("  X       — Toggle crash/stall detection (IMU)")
     print("  Q       — Quit")
     print("="*70)
     v = hooks.VEHICLE
@@ -827,7 +882,12 @@ def main():
             
             elif key == "g":
                 driver.start()
-    
+
+            elif key == "x":
+                on = driver._crash_monitor.toggle()
+                state = "ON" if on else "OFF"
+                print(f"\r🛡️  Crash detection: {state}" + " " * 20)
+
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         if hasattr(client, 'disconnect'):

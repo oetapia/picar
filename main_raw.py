@@ -273,6 +273,25 @@ def _handle_command(msg):
             _sensor_push_interval = 0
             return '{"ok":1,"unsub":1}'
 
+        elif c == "imu":
+            accel = accelerometer.get_state()
+            if accel.get('available'):
+                return json.dumps({
+                    "ok": 1,
+                    "imu": {
+                        "ax": round(accel['acceleration']['x'], 3),
+                        "ay": round(accel['acceleration']['y'], 3),
+                        "az": round(accel['acceleration']['z'], 3),
+                        "gx": round(accel['gyroscope']['x'], 1),
+                        "gy": round(accel['gyroscope']['y'], 1),
+                        "gz": round(accel['gyroscope']['z'], 1),
+                        "p": round(accel['tilt']['pitch'], 1),
+                        "r": round(accel['tilt']['roll'], 1),
+                    }
+                })
+            else:
+                return '{"ok":0,"e":"imu unavailable"}'
+
         elif c == "pg":
             state = proximity_guard.get_state()
             return json.dumps({

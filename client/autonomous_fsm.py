@@ -36,6 +36,7 @@ from enum import Enum, auto
 from typing import Optional, Set, Dict
 
 from picar_client import PicarClient
+from picar_ws_client import PicarWsClientSync
 import autonomous_hooks as hooks
 
 log = logging.getLogger("picar.fsm")
@@ -733,12 +734,30 @@ class AutonomousFSM:
 # MAIN FUNCTION (for standalone testing)
 # ═══════════════════════════════════════════════════════════════════
 
+def _create_client(mode: str):
+    """Create the appropriate client based on mode."""
+    if mode == "ws":
+        client = PicarWsClientSync()
+        client.connect()
+        return client
+    else:
+        return PicarClient()
+
+
 def main():
     """Main function for testing FSM autonomous mode."""
-    client = PicarClient()
+    import argparse
+    parser = argparse.ArgumentParser(description="Picar Autonomous FSM")
+    parser.add_argument("--mode", choices=["rest", "ws"], default="rest",
+                        help="Connection mode: rest (HTTP) or ws (WebSocket, lowest latency)")
+    args = parser.parse_args()
+
+    client = _create_client(args.mode)
     driver = AutonomousFSM(client)
-    
-    print(f"Connecting to Picar at {client.base_url}...")
+
+    label = "REST" if args.mode == "rest" else "WebSocket"
+    addr = client.base_url if hasattr(client, 'base_url') else client._async_client.uri
+    print(f"Connecting to Picar via {label} at {addr}...")
     try:
         s = client.status()
         print(f"✓ Connected. Motor: {s['motor_speed']}, Servo: {s['servo_angle']}°")
@@ -811,6 +830,8 @@ def main():
     
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if hasattr(client, 'disconnect'):
+            client.disconnect()
 
 
 if __name__ == "__main__":

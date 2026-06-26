@@ -1,0 +1,11 @@
+# Host-side dependencies (for client control & deployment scripts)
+# MicroPython libraries (machine, network, ssd1306, etc.) run on the Pico directly.
+
+# HTTP client for REST-based Picar control (client/picar_client.py)
+requests>=2.28.0
+
+# WebSocket client for low-latency Picar control (client/picar_ws_client.py)
+websockets>=11.0
+
+# Pico deployment tool (deploy_to_pico.py)
+mpremote>=1.20.0

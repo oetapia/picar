@@ -316,7 +316,7 @@
 <body>
     <div class="container">
         <h1>🤖 Pico W Robot Control</h1>
-        <div class="status connected" id="status">✅ Connected - Ready to Control!</div>
+        <div class="status" id="status">Connecting via WebSocket...</div>
         
         <div class="control-grid">
             <!-- D-Pad Control -->
@@ -475,13 +475,97 @@
     </div>
 
     <script>
-        const PICO = "http://192.168.178.59:5000";  // Set your Pico W's IP address here
+        // ══════════════════════════════════════════════════════
+        //  CONFIG
+        // ══════════════════════════════════════════════════════
+        const PICO_IP   = "192.168.178.59";
+        const PICO_PORT = 5000;
+        const PICO_REST = `http://${PICO_IP}:${PICO_PORT}`;
+        const PICO_WS   = `ws://${PICO_IP}:${PICO_PORT}/ws`;
+
+        // ══════════════════════════════════════════════════════
+        //  TRANSPORT LAYER — WebSocket with REST fallback
+        // ══════════════════════════════════════════════════════
+        let ws = null;
+        let wsConnected = false;
+        let wsQueue = [];          // pending {resolve, reject, timer}
+        let wsReconnectTimer = null;
+        let sensorCallback = null; // for sensor push
+
+        function wsConnect() {
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+            updateStatus('Connecting via WebSocket...', true);
+            ws = new WebSocket(PICO_WS);
+
+            ws.onopen = () => {
+                wsConnected = true;
+                if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+                updateStatus('WebSocket connected', true);
+                // Fetch initial state
+                sendWsCmd({c:"st"}).then(handleStatusResponse).catch(() => {});
+            };
+
+            ws.onmessage = (evt) => {
+                let data;
+                try { data = JSON.parse(evt.data); } catch { return; }
+
+                // Sensor push messages
+                if (data.t === "sns") {
+                    if (sensorCallback) sensorCallback(data);
+                    return;
+                }
+
+                // Command response — resolve oldest pending
+                if (wsQueue.length > 0) {
+                    const pending = wsQueue.shift();
+                    clearTimeout(pending.timer);
+                    pending.resolve(data);
+                }
+            };
+
+            ws.onclose = () => {
+                wsConnected = false;
+                // Reject all pending
+                wsQueue.forEach(p => { clearTimeout(p.timer); p.reject(new Error('disconnected')); });
+                wsQueue = [];
+                updateStatus('WebSocket disconnected — reconnecting...', false);
+                wsReconnectTimer = setTimeout(wsConnect, 2000);
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        }
+
+        function sendWsCmd(cmd, timeout = 3000) {
+            return new Promise((resolve, reject) => {
+                if (!wsConnected || !ws || ws.readyState !== WebSocket.OPEN) {
+                    reject(new Error('not connected'));
+                    return;
+                }
+                const timer = setTimeout(() => {
+                    const idx = wsQueue.findIndex(p => p.timer === timer);
+                    if (idx >= 0) wsQueue.splice(idx, 1);
+                    reject(new Error('timeout'));
+                }, timeout);
+                wsQueue.push({resolve, reject, timer});
+                ws.send(JSON.stringify(cmd));
+            });
+        }
+
+        // Fire-and-forget for high-frequency commands (motor/servo)
+        function sendWsFast(cmd) {
+            if (wsConnected && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(cmd));
+            }
+        }
 
         // ── State ──────────────────────────────────────────────
         let autoLights = true;
         let lastLightTarget = "";
         let autoRefreshTimer = null;
-        let keysDown = {};  // track held keys for keyup stop
+        let keysDown = {};
 
         // ── Status bar ─────────────────────────────────────────
         function updateStatus(message, isSuccess = true) {
@@ -496,7 +580,9 @@
         function updateServoDisplay(v) { document.getElementById('servoDisplay').textContent = v + '°'; }
         function getCurrentSpeed()     { return parseInt(document.getElementById('speedSlider').value); }
 
-        // ── Motor ──────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  MOTOR
+        // ══════════════════════════════════════════════════════
         function startMotor(speed) { sendMotor(speed); }
         function stopMotor()       { sendMotor(0); }
 
@@ -510,25 +596,25 @@
 
         function sendMotor(speed) {
             speed = Math.max(-100, Math.min(100, parseInt(speed)));
-            fetch(`${PICO}/api/motor/${speed}`)
-                .then(r => r.json())
-                .then(data => {
-                    updateStatus(data.message, data.success);
-                    document.getElementById('motorSlider').value = speed;
-                    updateMotorDisplay(speed);
-                    // Auto-lights: match Python client behaviour
-                    if (autoLights) {
-                        let target = speed > 0 ? 'front' : speed < 0 ? 'back' : 'off';
-                        if (target !== lastLightTarget) {
-                            lastLightTarget = target;
-                            fetch(`${PICO}/api/lights/${target}`).then(r => r.json()).then(updateLightUI).catch(() => {});
-                        }
-                    }
-                })
-                .catch(() => updateStatus('Motor command failed', false));
+            document.getElementById('motorSlider').value = speed;
+            updateMotorDisplay(speed);
+
+            // Auto-lights
+            if (autoLights) {
+                let target = speed > 0 ? 'front' : speed < 0 ? 'back' : 'off';
+                if (target !== lastLightTarget) {
+                    lastLightTarget = target;
+                    sendWsFast({c:"l", v:target});
+                }
+            }
+
+            sendWsFast({c:"m", v:speed});
+            updateStatus(`Motor: ${speed}`, true);
         }
 
-        // ── Servo ──────────────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  SERVO
+        // ══════════════════════════════════════════════════════
         function turnLeft() {
             const cur = parseInt(document.getElementById('servoSlider').value);
             sendServo(Math.max(0, cur - 15));
@@ -540,44 +626,44 @@
 
         function sendServo(angle) {
             angle = Math.max(0, Math.min(180, parseInt(angle)));
-            fetch(`${PICO}/api/servo/${angle}`)
-                .then(r => r.json())
-                .then(data => {
-                    updateStatus(data.message, data.success);
-                    document.getElementById('servoSlider').value = angle;
-                    updateServoDisplay(angle);
-                })
-                .catch(() => updateStatus('Servo command failed', false));
+            document.getElementById('servoSlider').value = angle;
+            updateServoDisplay(angle);
+            sendWsFast({c:"s", v:angle});
+            updateStatus(`Servo: ${angle}°`, true);
         }
 
-        // ── Emergency stop ─────────────────────────────────────
+        // ══════════════════════════════════════════════════════
+        //  EMERGENCY STOP
+        // ══════════════════════════════════════════════════════
         function emergencyStop() {
-            sendMotor(0);
+            sendWsFast({c:"b"});
             document.getElementById('motorSlider').value = 0;
             updateMotorDisplay(0);
             updateStatus('Emergency stop activated!', true);
         }
 
         // ══════════════════════════════════════════════════════
-        //  GEAR  (matches picar_client.py)
+        //  GEAR
         // ══════════════════════════════════════════════════════
         function setGear(status) {
-            fetch(`${PICO}/api/gear/${status}`)
-                .then(r => r.json())
+            sendWsCmd({c:"g", v:status})
                 .then(data => {
-                    updateStatus(data.message || `Gear: ${status}`, data.success);
-                    updateGearUI(data);
+                    if (data.ok) {
+                        const on = data.g === 1;
+                        updateGearUI({gear_on: on});
+                        updateStatus(`Gear: ${on ? 'LOW' : 'OFF'}`, true);
+                    } else {
+                        updateStatus(data.e || 'Gear error', false);
+                    }
                 })
                 .catch(() => updateStatus('Gear command failed', false));
         }
 
-        function toggleGear() {
-            setGear('toggle');
-        }
+        function toggleGear() { setGear('toggle'); }
 
         function updateGearUI(data) {
             if (!data) return;
-            const on = data.gear_on === true;
+            const on = data.gear_on === true || data.g === 1;
             document.getElementById('gearDot').className = 'light-dot' + (on ? ' on' : '');
             document.getElementById('gearStatusText').textContent = on ? 'low' : 'off';
             document.getElementById('btnGearOn').classList.toggle('active', on);
@@ -585,34 +671,41 @@
         }
 
         // ══════════════════════════════════════════════════════
-        //  LIGHTS  (matches picar_client.py)
+        //  LIGHTS
         // ══════════════════════════════════════════════════════
         function setLights(status) {
-            fetch(`${PICO}/api/lights/${status}`)
-                .then(r => r.json())
+            sendWsCmd({c:"l", v:status})
                 .then(data => {
-                    updateStatus(data.message || `Lights: ${status}`, data.success);
-                    updateLightUI(data);
+                    if (data.ok) {
+                        const st = data.l || status;
+                        updateLightUIFromStatus(st);
+                        updateStatus(`Lights: ${st}`, true);
+                    } else {
+                        updateStatus(data.e || 'Lights error', false);
+                    }
                 })
                 .catch(() => updateStatus('Lights command failed', false));
         }
 
-        function updateLightUI(data) {
-            if (!data) return;
-            const front = data.front === true;
-            const back  = data.back  === true;
+        function updateLightUIFromStatus(st) {
+            const front = (st === 'front' || st === 'both');
+            const back  = (st === 'back'  || st === 'both');
             document.getElementById('lightDotFront').className = 'light-dot' + (front ? ' on' : '');
             document.getElementById('lightDotBack').className  = 'light-dot' + (back  ? ' on' : '');
-            const st = data.status || (front && back ? 'both' : front ? 'front' : back ? 'back' : 'off');
             document.getElementById('lightStatusText').textContent = st;
 
-            // Highlight active button
             ['Front','Back','Both','Off'].forEach(n => {
                 document.getElementById('btnLight' + n).classList.remove('active');
             });
             const map = { front: 'Front', back: 'Back', both: 'Both', off: 'Off' };
             const btn = document.getElementById('btnLight' + (map[st] || 'Off'));
             if (btn) btn.classList.add('active');
+        }
+
+        function updateLightUI(data) {
+            if (!data) return;
+            const st = data.status || data.l || 'off';
+            updateLightUIFromStatus(st);
         }
 
         function toggleAutoLights() {
@@ -623,98 +716,104 @@
         }
 
         function fetchLightsStatus() {
-            fetch(`${PICO}/api/lights`)
-                .then(r => r.json())
+            sendWsCmd({c:"st"})
                 .then(data => {
-                    updateLightUI(data);
-                    setSensorOutput(formatLights(data));
+                    if (data.ok && data.st) {
+                        updateLightUIFromStatus(data.st.l || 'off');
+                        setSensorOutput(`<span class="label">💡 Lights:</span> <span class="value">${data.st.l || 'off'}</span>`);
+                    }
                 })
                 .catch(() => setSensorOutput('<span class="warn">Lights: request failed</span>'));
         }
 
         // ══════════════════════════════════════════════════════
-        //  SENSORS  (matches picar_client.py formatters)
+        //  SENSORS
         // ══════════════════════════════════════════════════════
         function setSensorOutput(html) {
             document.getElementById('sensorOutput').innerHTML = html;
         }
 
         function fetchSensor(type) {
-            setSensorOutput('<span class="dim">Reading ' + type + '…</span>');
-            fetch(`${PICO}/api/${type}`)
-                .then(r => r.json())
+            setSensorOutput('<span class="dim">Reading sensors…</span>');
+            sendWsCmd({c:"sns"})
                 .then(data => {
-                    if (type === 'accelerometer') setSensorOutput(formatAccelerometer(data));
-                    else if (type === 'tof')      setSensorOutput(formatTof(data));
-                    else if (type === 'ultrasonic') setSensorOutput(formatUltrasonic(data));
-                    else setSensorOutput('<pre>' + JSON.stringify(data, null, 2) + '</pre>');
+                    if (!data.ok) { setSensorOutput(`<span class="warn">Sensor read failed</span>`); return; }
+                    const sns = data.sns;
+                    if (type === 'accelerometer') setSensorOutput(formatAccelWs(sns));
+                    else if (type === 'tof')      setSensorOutput(formatTofWs(sns));
+                    else if (type === 'ultrasonic') setSensorOutput(formatUltraWs(sns));
+                    else setSensorOutput('<pre>' + JSON.stringify(sns, null, 2) + '</pre>');
                 })
                 .catch(() => setSensorOutput(`<span class="warn">${type}: request failed</span>`));
         }
 
         function fetchAllSensors() {
             setSensorOutput('<span class="dim">Reading all sensors…</span>');
-            Promise.allSettled([
-                fetch(`${PICO}/api/accelerometer`).then(r => r.json()),
-                fetch(`${PICO}/api/tof`).then(r => r.json()),
-                fetch(`${PICO}/api/ultrasonic`).then(r => r.json()),
-            ]).then(([accel, tof, ultra]) => {
-                let html = '<span class="label">━━━ All Sensors ━━━</span>\n';
-                html += formatAccelerometer(accel.status === 'fulfilled' ? accel.value : { success: false }) + '\n';
-                html += formatTof(tof.status === 'fulfilled' ? tof.value : { success: false }) + '\n';
-                html += formatUltrasonic(ultra.status === 'fulfilled' ? ultra.value : { success: false });
-                setSensorOutput(html);
-            });
+            sendWsCmd({c:"sns"})
+                .then(data => {
+                    if (!data.ok) { setSensorOutput('<span class="warn">Sensor read failed</span>'); return; }
+                    const sns = data.sns;
+                    let html = '<span class="label">━━━ All Sensors ━━━</span>\n';
+                    html += formatAccelWs(sns) + '\n';
+                    html += formatTofWs(sns) + '\n';
+                    html += formatUltraWs(sns);
+                    setSensorOutput(html);
+                })
+                .catch(() => setSensorOutput('<span class="warn">Sensor read failed</span>'));
         }
 
-        // ── Formatters (mirror picar_client.py) ────────────────
-        function formatAccelerometer(data) {
-            if (!data || !data.success) return '<span class="dim">Accelerometer: Not available</span>';
-            const tilt = data.tilt || {};
-            const orientation = data.orientation || 'unknown';
-            const pitch = (tilt.pitch || 0).toFixed(1);
-            const roll  = (tilt.roll  || 0).toFixed(1);
-            return `<span class="label">🧭 Accel:</span> Pitch=<span class="value">${pitch}°</span> Roll=<span class="value">${roll}°</span> [<span class="ok">${orientation}</span>]`;
+        // ── Formatters for WS compact format ──────────────────
+        function formatAccelWs(sns) {
+            if (!sns || !sns.accel) return '<span class="dim">Accelerometer: Not available</span>';
+            const a = sns.accel;
+            return `<span class="label">🧭 Accel:</span> Pitch=<span class="value">${a.p.toFixed(1)}°</span> Roll=<span class="value">${a.r.toFixed(1)}°</span> [<span class="ok">${a.o}</span>]`;
         }
 
-        function formatTof(data) {
-            if (!data || !data.success) return '<span class="dim">ToF: Not available</span>';
-            const left  = data.left_distance_cm  ? data.left_distance_cm.toFixed(1) + 'cm' : '---';
-            const right = data.right_distance_cm ? data.right_distance_cm.toFixed(1) + 'cm' : '---';
+        function formatTofWs(sns) {
+            if (!sns || !sns.tof) return '<span class="dim">ToF: Not available</span>';
+            const t = sns.tof;
+            const left  = t.l != null ? t.l.toFixed(1) + 'cm' : '---';
+            const right = t.r != null ? t.r.toFixed(1) + 'cm' : '---';
             let html = `<span class="label">📏 ToF Front:</span> L=<span class="value">${left}</span> R=<span class="value">${right}</span>`;
-            if (data.angle) {
-                const a = data.angle;
-                html += ` | <span class="value">${a.angle_degrees.toFixed(1)}°</span> [<span class="ok">${a.orientation}</span>]`;
+            if (t.a != null) {
+                html += ` | <span class="value">${t.a.toFixed(1)}°</span>`;
             }
             return html;
         }
 
-        function formatUltrasonic(data) {
-            if (!data || !data.success) return '<span class="dim">Ultrasonic: Not available</span>';
-            if (data.in_range) {
-                const d = (data.distance_cm || 0).toFixed(1);
-                const warn = data.distance_cm < 30 ? ' <span class="warn">⚠️ CLOSE!</span>' : '';
-                return `<span class="label">📐 Ultrasonic Rear:</span> <span class="value">${d}cm</span>${warn}`;
+        function formatUltraWs(sns) {
+            if (!sns || !sns.ultra) return '<span class="dim">Ultrasonic: Not available</span>';
+            const u = sns.ultra;
+            if (u.ir && u.d != null) {
+                const warn = u.d < 30 ? ' <span class="warn">⚠️ CLOSE!</span>' : '';
+                return `<span class="label">📐 Ultrasonic Rear:</span> <span class="value">${u.d.toFixed(1)}cm</span>${warn}`;
             }
             return '<span class="label">📐 Ultrasonic Rear:</span> <span class="ok">All clear</span>';
         }
 
         function formatLights(data) {
-            if (!data || !data.success) return '<span class="dim">Lights: Not available</span>';
-            const st = data.status || 'unknown';
+            if (!data) return '<span class="dim">Lights: Not available</span>';
+            const st = data.status || data.l || 'unknown';
             return `<span class="label">💡 Lights:</span> <span class="value">${st}</span>`;
         }
 
-        // ── Auto-refresh ───────────────────────────────────────
+        // ── Auto-refresh (uses sensor subscription) ───────────
         function toggleAutoRefresh() {
             const on = document.getElementById('autoRefreshToggle').checked;
-            document.getElementById('autoRefreshLabel').textContent = on ? 'ON (2 s)' : 'OFF';
+            document.getElementById('autoRefreshLabel').textContent = on ? 'ON (live)' : 'OFF';
             if (on) {
-                fetchAllSensors();
-                autoRefreshTimer = setInterval(fetchAllSensors, 2000);
+                sensorCallback = (data) => {
+                    let html = '<span class="label">━━━ Live Sensors ━━━</span>\n';
+                    html += formatAccelWs(data) + '\n';
+                    html += formatTofWs(data) + '\n';
+                    html += formatUltraWs(data);
+                    setSensorOutput(html);
+                };
+                sendWsCmd({c:"sub", ms:500}).catch(() => {});
             } else {
-                clearInterval(autoRefreshTimer);
-                autoRefreshTimer = null;
+                sensorCallback = null;
+                sendWsCmd({c:"unsub"}).catch(() => {});
+                setSensorOutput('<span class="dim">Auto-refresh stopped</span>');
             }
         }
 
@@ -722,7 +821,9 @@
         //  DISPLAY / MESSAGE
         // ══════════════════════════════════════════════════════
         function loadIcons() {
-            fetch(`${PICO}/api/icons`)
+            // Icons only available via REST (reads icons.json on Pico)
+            // Skip if running raw WS only — not critical
+            fetch(`${PICO_REST}/api/icons`)
                 .then(r => r.json())
                 .then(data => {
                     if (!data.success) return;
@@ -740,74 +841,67 @@
         function sendMessage() {
             const message = document.getElementById('messageInput').value.trim();
             if (!message) { updateStatus('Please enter a message', false); return; }
-            const icon = document.getElementById('iconSelect').value || null;
-            fetch(`${PICO}/api/text`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: message, icon: icon })
-            })
-            .then(r => r.json())
-            .then(data => {
-                updateStatus(data.message, data.success);
-                if (data.success) document.getElementById('messageInput').value = '';
-            })
-            .catch(() => updateStatus('Message send failed', false));
+            const icon = document.getElementById('iconSelect').value || undefined;
+            const cmd = {c:"t", v:message};
+            if (icon) cmd.i = icon;
+            sendWsCmd(cmd)
+                .then(data => {
+                    if (data.ok) {
+                        updateStatus(`Displayed: ${message}`, true);
+                        document.getElementById('messageInput').value = '';
+                    } else {
+                        updateStatus(data.e || 'Display error', false);
+                    }
+                })
+                .catch(() => updateStatus('Message send failed', false));
         }
 
         function clearMessage() {
-            fetch(`${PICO}/api/text`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: '' })
-            })
-            .then(r => r.json())
-            .then(data => updateStatus('Display cleared', data.success))
-            .catch(() => updateStatus('Clear failed', false));
+            sendWsCmd({c:"t", v:""})
+                .then(() => updateStatus('Display cleared', true))
+                .catch(() => updateStatus('Clear failed', false));
         }
 
         function getStatus() {
-            fetch(`${PICO}/api/status`)
-                .then(r => r.json())
-                .then(data => {
-                    updateStatus(data.message, data.success);
-                    if (data.success) {
-                        document.getElementById('motorSlider').value = data.motor_speed || 0;
-                        document.getElementById('servoSlider').value = data.servo_angle || 90;
-                        updateMotorDisplay(data.motor_speed || 0);
-                        updateServoDisplay(data.servo_angle || 90);
-                    }
-                })
+            sendWsCmd({c:"st"})
+                .then(handleStatusResponse)
                 .catch(() => updateStatus('Status request failed', false));
         }
 
+        function handleStatusResponse(data) {
+            if (!data || !data.ok || !data.st) return;
+            const st = data.st;
+            document.getElementById('motorSlider').value = st.m || 0;
+            document.getElementById('servoSlider').value = st.s || 90;
+            updateMotorDisplay(st.m || 0);
+            updateServoDisplay(st.s || 90);
+            updateGearUI({gear_on: st.g === 1});
+            updateLightUIFromStatus(st.l || 'off');
+            updateStatus(`Motor:${st.m} Servo:${st.s}° Gear:${st.g ? 'LOW' : 'OFF'} Lights:${st.l}`, true);
+        }
+
         // ══════════════════════════════════════════════════════
-        //  KEYBOARD CONTROLS  (matches picar_client.py key map)
+        //  KEYBOARD CONTROLS
         // ══════════════════════════════════════════════════════
         document.addEventListener('keydown', (e) => {
-            // Skip if focused in a text input / select
             const tag = e.target.tagName.toLowerCase();
             if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
 
             const key = e.key.toLowerCase();
-
-            // Prevent default for keys we handle
             if (['w','s','a','d','c',' ','f','b','l','o','t','g','1','2','3','4','5'].includes(key)) {
                 e.preventDefault();
             }
 
-            // Debounce held keys for motor/servo
             if (keysDown[key]) return;
             keysDown[key] = true;
 
             switch (key) {
-                // Movement
                 case 'w': sendMotor(getCurrentSpeed());  break;
                 case 's': sendMotor(-getCurrentSpeed()); break;
                 case 'a': turnLeft();  break;
                 case 'd': turnRight(); break;
                 case 'c': sendServo(90); break;
                 case ' ': emergencyStop(); break;
-                // Lights
                 case 'f': setLights('front'); break;
                 case 'b': setLights('back');  break;
                 case 'l': setLights('both');  break;
@@ -816,9 +910,7 @@
                     document.getElementById('autoLightToggle').checked = !autoLights;
                     toggleAutoLights();
                     break;
-                // Gear
                 case 'g': toggleGear(); break;
-                // Sensors
                 case '1': fetchSensor('accelerometer'); break;
                 case '2': fetchSensor('tof');           break;
                 case '3': fetchSensor('ultrasonic');     break;
@@ -830,24 +922,18 @@
         document.addEventListener('keyup', (e) => {
             const key = e.key.toLowerCase();
             delete keysDown[key];
-            // Stop motor when W or S released (hold-to-drive)
             if (key === 'w' || key === 's') {
                 sendMotor(0);
             }
         });
 
-        // Allow Enter key to send message
         document.getElementById('messageInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
 
         // ── Init ───────────────────────────────────────────────
-        setTimeout(getStatus, 500);
+        wsConnect();
         loadIcons();
-        // Initial lights status
-        fetch(`${PICO}/api/lights`).then(r => r.json()).then(updateLightUI).catch(() => {});
-        // Initial gear status (from /api/status, which includes gear_on)
-        fetch(`${PICO}/api/status`).then(r => r.json()).then(updateGearUI).catch(() => {});
     </script>
 </body>
 </html>

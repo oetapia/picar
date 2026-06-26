@@ -335,11 +335,11 @@ def format_lights(data):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Picar remote control")
-    parser.add_argument("--speed", type=int, default=75,
+    parser.add_argument("--speed", type=int, default=90,
                         help="Forward/reverse motor speed magnitude (0-100, default 75)")
-    parser.add_argument("--left-angle", type=int, default=45,
+    parser.add_argument("--left-angle", type=int, default=70,
                         help="Servo angle for left steering (0-180, default 45)")
-    parser.add_argument("--right-angle", type=int, default=135,
+    parser.add_argument("--right-angle", type=int, default=120,
                         help="Servo angle for right steering (0-180, default 135)")
     args = parser.parse_args()
 

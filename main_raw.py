@@ -125,21 +125,24 @@ def _ws_accept_key(key):
     return binascii.b2a_base64(d.digest())[:-1]
 
 
-def _encode_frame(data):
-    """Encode a text WebSocket frame (server → client, no mask)."""
+def _encode_frame(data, opcode=None):
+    """Encode a WebSocket frame (server → client, no mask)."""
     if isinstance(data, str):
         payload = data.encode()
-        opcode = 0x81  # FIN + TEXT
+        if opcode is None:
+            opcode = 0x01  # TEXT
     else:
         payload = data
-        opcode = 0x82  # FIN + BINARY
+        if opcode is None:
+            opcode = 0x02  # BINARY
+    fin_opcode = 0x80 | opcode
     length = len(payload)
     if length < 126:
-        header = bytes([opcode, length])
+        header = bytes([fin_opcode, length])
     elif length < 65536:
-        header = bytes([opcode, 126]) + struct.pack('>H', length)
+        header = bytes([fin_opcode, 126]) + struct.pack('>H', length)
     else:
-        header = bytes([opcode, 127]) + struct.pack('>Q', length)
+        header = bytes([fin_opcode, 127]) + struct.pack('>Q', length)
     return header + payload
 
 
@@ -388,16 +391,22 @@ async def _handle_client(reader, writer):
 
             if opcode == 0x08:  # CLOSE
                 break
-            elif opcode == 0x09:  # PING
-                writer.write(_encode_frame(payload))
+            elif opcode == 0x09:  # PING → respond with PONG
+                writer.write(_encode_frame(payload, opcode=0x0A))
                 await writer.drain()
                 continue
-            elif opcode == 0x0A:  # PONG
+            elif opcode == 0x0A:  # PONG — ignore
                 continue
             elif opcode == 0x01:  # TEXT
-                msg = payload.decode()
+                try:
+                    msg = payload.decode()
+                except UnicodeError:
+                    continue
             elif opcode == 0x02:  # BINARY
-                msg = payload.decode()
+                try:
+                    msg = payload.decode()
+                except UnicodeError:
+                    continue
             else:
                 continue
 
@@ -416,7 +425,8 @@ async def _handle_client(reader, writer):
         _safe_stop()
 
         try:
-            writer.write(_encode_frame(b''))  # close frame
+            writer.write(_encode_frame(b'', opcode=0x08))
+            await writer.drain()
         except Exception:
             pass
         try:

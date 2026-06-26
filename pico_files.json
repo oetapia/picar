@@ -1,6 +1,8 @@
 {
   "include_files": [
     "main.py",
+    "main_ws.py",
+    "main_raw.py",
     "wifi.py",
     "motor3.py",
     "servo.py",
@@ -12,7 +14,9 @@
     "vl53l0x_mp.py",
     "config.py",
     "config.example.py",
-    "pico_files.json"
+    "pico_files.json",
+    "deploy_to_pico.py",
+    "sync_branches.py"
   ],
   "include_dirs": [
     "microdot",

@@ -24,14 +24,15 @@ Protocol (JSON, short keys to minimize bytes):
         {"c":"sub","ms":100}    subscribe sensor push (interval ms)
         {"c":"unsub"}           unsubscribe sensor push
 
-    Any command may carry "i":<n>, which is echoed on the reply so the client
-    can correlate the two. A client that streams "ctl" frames also gets a
+    Any command may carry "r":<n>, which is echoed on the reply so the client
+    can correlate the two. ("i" is not used for this — it is already the icon
+    field of the "t" command.) A client that streams "ctl" frames also gets a
     failsafe: the motor stops if the frames stop (see CONTROL_TIMEOUT).
 
     Pico → Client:
         {"ok":1,"m":50}                       command ack
         {"ok":1,"st":{...}}                   status response
-        {"ok":1,"m":50,"i":7}                 ack correlated to request 7
+        {"ok":1,"m":50,"r":7}                 ack correlated to request 7
         {"t":"sns","accel":{...},"tof":{...},"ultra":{...},"ts":123}  sensor push
         {"ok":0,"e":"error message"}          error
 """
@@ -360,8 +361,8 @@ async def ws_handler(request, ws):
                     # Echo the request id so the client can match this reply to
                     # the command that asked for it. Without it a timed-out
                     # command's late reply gets read by whatever asked next.
-                    if "i" in cmd:
-                        response["i"] = cmd["i"]
+                    if "r" in cmd:
+                        response["r"] = cmd["r"]
                     await ws.send(json.dumps(response))
             except ValueError:
                 await ws.send(json.dumps({"ok": 0, "e": "bad json"}))

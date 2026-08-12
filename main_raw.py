@@ -16,6 +16,11 @@ Protocol: identical to main_ws.py (JSON short keys), but responses
 are pre-formatted strings to avoid serialization overhead.
 
     Client → Pico:
+        {"c":"ctl","m":50,"s":120,"q":1}
+                                combined control frame — throttle and steering
+                                together. "q":1 means do not ack. This is the
+                                path a driving client should use: one message
+                                per tick and no reply traffic.
         {"c":"m","v":50}        motor speed (-100..100)
         {"c":"b"}               brake
         {"c":"s","v":120}       servo angle (0..180)
@@ -27,8 +32,14 @@ are pre-formatted strings to avoid serialization overhead.
         {"c":"sub","ms":100}    subscribe sensor push
         {"c":"unsub"}           unsubscribe sensor push
 
+    Any command may carry "r":<n>, which is echoed on the reply so the client
+    can correlate the two. ("i" is not used for this — it is already the icon
+    field of the "t" command.) A client that streams "ctl" frames also gets a
+    failsafe: the motor stops if the frames stop (see CONTROL_TIMEOUT).
+
     Pico → Client:
         {"ok":1,"m":50}         command ack (pre-built string)
+        {"r":7,"ok":1,"m":50}   ack correlated to request 7
         {"ok":0,"e":"..."}      error
         {"t":"sns",...}          sensor push
 """
@@ -115,6 +126,14 @@ _ws_writer = None
 IDLE_TIMEOUT = 5
 _last_command_time = 0
 
+# 0 = no client is streaming control frames. Control is pushed best-effort at
+# ~20 Hz with a 250 ms keepalive, so a whole second of silence means the client
+# or the link is gone and the car must not keep its last commanded speed. Only
+# armed once a "ctl" frame has been seen, so the keyboard client — which sets a
+# speed and then legitimately says nothing — is never cut off.
+_last_control_time = 0
+CONTROL_TIMEOUT = 1.0
+
 
 # ========== WebSocket Frame Helpers ==========
 
@@ -183,20 +202,59 @@ async def _ws_send(writer, data):
 # ========== Command Dispatch (pre-built responses) ==========
 
 def _handle_command(msg):
-    """Parse JSON command, execute, return response string."""
-    global _last_command_time, _sensor_push_interval
-    _last_command_time = time.time()
+    """Parse a JSON command, dispatch it, return the response string or None.
 
+    None means send nothing — see the "ctl" branch of _dispatch."""
     try:
         cmd = json.loads(msg)
     except ValueError:
         return '{"ok":0,"e":"bad json"}'
 
+    response = _dispatch(cmd)
+    rid = cmd.get("r")
+    if response is not None and rid is not None:
+        # Splice the echoed request id into the pre-built response string. The
+        # client correlates replies by it, so a timed-out command's late reply
+        # can no longer be read by whichever command asked next. Every response
+        # here starts with '{', so replacing that brace keeps the JSON valid.
+        return '{"r":' + str(rid) + ',' + response[1:]
+    return response
+
+
+def _dispatch(cmd):
+    """Execute a parsed command and return its pre-built response string."""
+    global _last_command_time, _sensor_push_interval, _last_control_time
+    _last_command_time = time.time()
+
     c = cmd.get("c")
     v = cmd.get("v")
 
     try:
-        if c == "m":
+        if c == "ctl":
+            # Combined control frame: throttle and steering in one message, so a
+            # driving client costs one round of work per tick instead of two.
+            # Posted fire-and-forget at ~20 Hz, so this path stays cheap —
+            # redundant actuator writes are skipped (the keepalive resends
+            # unchanged state) and no reply is built at all when "q" is set.
+            _last_control_time = time.time()
+            if "m" in cmd:
+                speed = max(-100, min(100, int(cmd["m"])))
+                if speed != motor.current_motor_speed:
+                    motor.current_motor_speed = speed
+                    motor.update_motor()
+            if "s" in cmd:
+                angle = max(0, min(180, int(cmd["s"])))
+                if angle != servo.current_angle + 90:
+                    servo.current_angle = angle - 90
+                    servo.set_servo_angle(angle)
+            _show("M:{} S:{}".format(motor.current_motor_speed,
+                                     servo.current_angle + 90))
+            if cmd.get("q"):
+                return None
+            return ('{"ok":1,"m":' + str(motor.current_motor_speed) +
+                    ',"s":' + str(servo.current_angle + 90) + '}')
+
+        elif c == "m":
             speed = max(-100, min(100, int(v)))
             motor.current_motor_speed = speed
             motor.update_motor()
@@ -358,7 +416,7 @@ def _safe_stop():
 async def _handle_client(reader, writer):
     """Handle one WebSocket client connection (one at a time)."""
     global _client_connected, _client_ip, _last_command_time
-    global _sensor_push_interval, _ws_writer
+    global _sensor_push_interval, _ws_writer, _last_control_time
 
     # ---------- HTTP Upgrade Handshake ----------
     ws_key = None
@@ -430,8 +488,11 @@ async def _handle_client(reader, writer):
                 continue
 
             response = _handle_command(msg)
-            writer.write(_encode_frame(response))
-            await writer.drain()
+            # None means the command asked not to be acked, so nothing goes on
+            # the wire — a streaming client saves a frame per tick each way.
+            if response is not None:
+                writer.write(_encode_frame(response))
+                await writer.drain()
 
     except Exception as e:
         print(f"WS error: {e}")
@@ -440,6 +501,7 @@ async def _handle_client(reader, writer):
         _client_connected = False
         _ws_writer = None
         _sensor_push_interval = 0
+        _last_control_time = 0    # disarm the watchdog for the next client
         push_task.cancel()
         _safe_stop()
 
@@ -481,6 +543,29 @@ async def _sensor_push_loop(writer):
             await asyncio.sleep(0.1)
 
 
+# ========== Control Watchdog ==========
+
+async def _control_watchdog():
+    """Stop the motor when a streaming client goes quiet.
+
+    Control frames are best-effort pushes, so losing the link no longer produces
+    a clean disconnect that _safe_stop can catch — the car would just keep its
+    last commanded speed. Arms itself only after a "ctl" frame has been seen
+    (see CONTROL_TIMEOUT)."""
+    global _last_control_time
+    while True:
+        await asyncio.sleep(0.2)
+        if not _last_control_time:
+            continue
+        if time.time() - _last_control_time >= CONTROL_TIMEOUT:
+            _last_control_time = 0   # re-arms on the next control frame
+            if motor.current_motor_speed != 0:
+                motor.current_motor_speed = 0
+                motor.update_motor()
+                _show("Link lost: STOP")
+                print("Control watchdog: no frames, motor stopped")
+
+
 # ========== Idle Display Watcher ==========
 
 async def _idle_watcher():
@@ -512,6 +597,7 @@ async def start_server():
     asyncio.create_task(proximity_guard.monitor())
     asyncio.create_task(data_logger.monitor())
     asyncio.create_task(_idle_watcher())
+    asyncio.create_task(_control_watchdog())
     asyncio.create_task(_display_loop())
 
     server = await asyncio.start_server(_handle_client, '0.0.0.0', 5000)

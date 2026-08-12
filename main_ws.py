@@ -9,6 +9,11 @@ Usage: Copy this file as main.py on the Pico to use WebSocket mode,
 
 Protocol (JSON, short keys to minimize bytes):
     Client → Pico:
+        {"c":"ctl","m":50,"s":120,"q":1}
+                                combined control frame — throttle and steering
+                                together. "q":1 means do not ack. This is the
+                                path a driving client should use: one message
+                                per tick, no reply traffic, and no OLED redraw.
         {"c":"m","v":50}        motor speed (-100..100)
         {"c":"b"}               brake
         {"c":"s","v":120}       servo angle (0..180)
@@ -19,9 +24,14 @@ Protocol (JSON, short keys to minimize bytes):
         {"c":"sub","ms":100}    subscribe sensor push (interval ms)
         {"c":"unsub"}           unsubscribe sensor push
 
+    Any command may carry "i":<n>, which is echoed on the reply so the client
+    can correlate the two. A client that streams "ctl" frames also gets a
+    failsafe: the motor stops if the frames stop (see CONTROL_TIMEOUT).
+
     Pico → Client:
         {"ok":1,"m":50}                       command ack
         {"ok":1,"st":{...}}                   status response
+        {"ok":1,"m":50,"i":7}                 ack correlated to request 7
         {"t":"sns","accel":{...},"tof":{...},"ultra":{...},"ts":123}  sensor push
         {"ok":0,"e":"error message"}          error
 """
@@ -81,27 +91,66 @@ _last_command_time = 0
 _sensor_push_interval = 0  # 0 = disabled, >0 = push interval in ms
 _sensor_push_task = None
 _ws_ref = None  # reference to active WebSocket for push
+_last_display_time = 0    # throttles OLED redraws away from the control path
+_last_control_time = 0    # 0 = no client is streaming control frames
 
 IDLE_TIMEOUT = 5  # seconds before reverting display to server IP
+
+# A full SSD1306 redraw is an I2C blit of the entire framebuffer, and it happens
+# inline in the WebSocket handler — which is strictly serial, so every redraw
+# delays the next command. Doing one per motor/servo command was why the Pico
+# could not drain its socket while driving. Control frames now share one redraw
+# per interval; discrete events (brake, gear, lights) still redraw immediately.
+DISPLAY_MIN_INTERVAL = 0.25
+
+# Control frames are pushed best-effort at ~20 Hz with a 250 ms keepalive, so a
+# whole second of silence means the client or the link is gone. Only armed once
+# a "ctl" frame has been seen, so the keyboard client — which sets a speed and
+# then legitimately says nothing — is never cut off.
+CONTROL_TIMEOUT = 1.0
 
 
 # ========== Command Dispatcher ==========
 
 def handle_command(cmd):
     """Dispatch a command dict and return response dict."""
-    global _last_command_time, _sensor_push_interval
+    global _last_command_time, _sensor_push_interval, _last_control_time
     _last_command_time = time.time()
-    
+
     c = cmd.get("c")
     v = cmd.get("v")
-    
+
     try:
-        if c == "m":
+        if c == "ctl":
+            # Combined control frame: throttle and steering in one message, so a
+            # driving client costs one round of work per tick instead of two.
+            # Posted fire-and-forget at ~20 Hz, so this path has to stay cheap:
+            # no OLED blit per frame, redundant writes skipped, and no ack at all
+            # when "q" is set (the client isn't listening for one).
+            _last_control_time = time.time()
+            if "m" in cmd:
+                speed = max(-100, min(100, int(cmd["m"])))
+                if speed != motor.current_motor_speed:
+                    motor.current_motor_speed = speed
+                    motor.update_motor()
+            if "s" in cmd:
+                angle = max(0, min(180, int(cmd["s"])))
+                if angle != servo.current_angle + 90:
+                    servo.current_angle = angle - 90
+                    servo.set_servo_angle(angle)
+            _show_throttled("M{} S{}".format(motor.current_motor_speed,
+                                             servo.current_angle + 90))
+            if cmd.get("q"):
+                return None
+            return {"ok": 1, "m": motor.current_motor_speed,
+                    "s": servo.current_angle + 90}
+
+        elif c == "m":
             # Motor speed
             speed = max(-100, min(100, int(v)))
             motor.current_motor_speed = speed
             motor.update_motor()
-            _show(f"Motor: {speed}")
+            _show_throttled(f"Motor: {speed}")
             return {"ok": 1, "m": speed}
         
         elif c == "b":
@@ -117,7 +166,7 @@ def handle_command(cmd):
             angle = max(0, min(180, int(v)))
             servo.current_angle = angle - 90
             servo.set_servo_angle(angle)
-            _show(f"Servo: {angle}")
+            _show_throttled(f"Servo: {angle}")
             return {"ok": 1, "s": angle}
         
         elif c == "g":
@@ -243,7 +292,19 @@ def _read_sensors():
 
 def _show(text):
     """Update OLED with command info."""
+    global _last_display_time
+    _last_display_time = time.time()
     display.update_display(header=_client_ip or "WS", text=text)
+
+
+def _show_throttled(text):
+    """OLED update for high-rate control frames — at most one per interval.
+
+    See DISPLAY_MIN_INTERVAL: the redraw is a synchronous I2C blit inside the
+    serial command handler, so at control rate it, not the network, is what
+    stops the Pico keeping up."""
+    if time.time() - _last_display_time >= DISPLAY_MIN_INTERVAL:
+        _show(text)
 
 
 def _safe_stop():
@@ -263,6 +324,7 @@ async def ws_handler(request, ws):
     """Main WebSocket handler — one client at a time."""
     global _client_connected, _client_ip, _last_command_time
     global _sensor_push_interval, _sensor_push_task, _ws_ref
+    global _last_control_time
     
     # Get client IP
     try:
@@ -292,7 +354,15 @@ async def ws_handler(request, ws):
             try:
                 cmd = json.loads(msg)
                 response = handle_command(cmd)
-                await ws.send(json.dumps(response))
+                # A None response means the command asked not to be acked, so
+                # the reply never goes on the wire at all.
+                if response is not None:
+                    # Echo the request id so the client can match this reply to
+                    # the command that asked for it. Without it a timed-out
+                    # command's late reply gets read by whatever asked next.
+                    if "i" in cmd:
+                        response["i"] = cmd["i"]
+                    await ws.send(json.dumps(response))
             except ValueError:
                 await ws.send(json.dumps({"ok": 0, "e": "bad json"}))
             except Exception as e:
@@ -308,6 +378,7 @@ async def ws_handler(request, ws):
         _client_connected = False
         _ws_ref = None
         _sensor_push_interval = 0
+        _last_control_time = 0    # disarm the watchdog for the next client
         push_task.cancel()
         
         # Safety stop
@@ -337,6 +408,30 @@ async def _sensor_push_loop(ws):
         else:
             # Not subscribed — check again in 100ms
             await asyncio.sleep(0.1)
+
+
+# ========== Control Watchdog ==========
+
+async def _control_watchdog():
+    """Stop the motor when a streaming client goes quiet.
+
+    Control frames are now best-effort pushes, so losing the link no longer
+    produces a clean disconnect that _safe_stop can catch — the car would just
+    keep its last commanded speed. Arms itself only after a "ctl" frame has been
+    seen (see CONTROL_TIMEOUT), so clients that set a speed and stop talking are
+    left alone."""
+    global _last_control_time
+    while True:
+        await asyncio.sleep(0.2)
+        if not _last_control_time:
+            continue
+        if time.time() - _last_control_time >= CONTROL_TIMEOUT:
+            _last_control_time = 0   # re-arms on the next control frame
+            if motor.current_motor_speed != 0:
+                motor.current_motor_speed = 0
+                motor.update_motor()
+                _show("Link lost: STOP")
+                print("Control watchdog: no frames, motor stopped")
 
 
 # ========== Idle Display Watcher ==========
@@ -371,6 +466,7 @@ async def start_server():
     asyncio.create_task(proximity_guard.monitor())
     asyncio.create_task(data_logger.monitor())
     asyncio.create_task(_idle_watcher())
+    asyncio.create_task(_control_watchdog())
     
     try:
         await app.start_server(host='0.0.0.0', port=5000, debug=False)

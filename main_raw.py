@@ -7,7 +7,11 @@ Direct uasyncio TCP server with hand-rolled WebSocket framing.
 Optimizations over main_ws.py:
     - No Microdot: raw TCP → HTTP upgrade → binary WS frames
     - Pre-built response strings: avoids json.dumps() per command
-    - Debounced OLED: display updates at 5Hz max, never blocks commands
+    - State-driven OLED: the panel shows one of three states (IP when no client,
+      "Connected - idle", "Manual control" while driving), so a redraw only
+      happens on a state change instead of once per command
+    - Lights follow the motor on the Pico, so a driving client does not spend a
+      second round trip per direction change
     - GC tuning: gc.threshold() for smaller, more predictable pauses
     - WiFi PM disabled in wifi.py (already done)
     - Single-allocation frame buffer for reads
@@ -25,7 +29,8 @@ are pre-formatted strings to avoid serialization overhead.
         {"c":"b"}               brake
         {"c":"s","v":120}       servo angle (0..180)
         {"c":"g","v":"on"}      gear: on/off/toggle
-        {"c":"l","v":"front"}   lights: front/back/both/off
+        {"c":"l","v":"front"}   lights: front/back/both/off — takes the lights
+                                off automatic mode until {"c":"l","v":"auto"}
         {"c":"t","v":"hello"}   display text
         {"c":"st"}              request status
         {"c":"sns"}             one-shot sensor read
@@ -35,7 +40,11 @@ are pre-formatted strings to avoid serialization overhead.
     Any command may carry "r":<n>, which is echoed on the reply so the client
     can correlate the two. ("i" is not used for this — it is already the icon
     field of the "t" command.) A client that streams "ctl" frames also gets a
-    failsafe: the motor stops if the frames stop (see CONTROL_TIMEOUT).
+    failsafe: the motor stops if the frames stop (see CONTROL_TIMEOUT_MS).
+
+    The lights follow the motor: forward lights the front, reverse the back, stop
+    turns both off. A client does not need to ask for this. Sending "l" by hand
+    takes over — automatic mode stays off until {"c":"l","v":"auto"}.
 
     Pico → Client:
         {"ok":1,"m":50}         command ack (pre-built string)
@@ -71,11 +80,15 @@ from sensors import data_logger
 led = machine.Pin("LED", machine.Pin.OUT)
 
 # ========== Initial State ==========
+# The motor driver redraws the OLED on every speed change, which is blocking I2C
+# work in the middle of the command path. This server owns the display instead
+# (see _display_loop), so the driver's own updates are switched off.
+motor.show_status = False
+
 time.sleep(2)
 led.off()
 motor.update_motor()
 servo.set_servo_angle(90)
-servo.display_servo()
 gear.set_gear(False)
 
 # ========== WiFi Connection ==========
@@ -84,7 +97,7 @@ wlan = wifi.connect_wifi()
 if wlan:
     ip_address = wlan.ifconfig()[0]
     print("Connected to Wi-Fi. IP Address:", ip_address)
-    display.update_display(header="Raw WS", text=f"{ip_address}:5000")
+    display.update_display(header="Picar", text=f"{ip_address}:5000")
     led.on()
     time.sleep(1)
     led.off()
@@ -94,45 +107,71 @@ else:
     ip_address = "0.0.0.0"
 
 
-# ========== Debounced Display ==========
-_display_dirty = False
-_display_header = ""
-_display_text = ""
+# ========== Display ==========
+# A full 128x32 redraw is blocking I2C work, so the command path never touches
+# the panel — it only names the state it wants, which is a cheap idempotent
+# assignment. The display task polls at 5 Hz and redraws only on a real change,
+# so streaming control frames cost nothing here no matter how fast they arrive.
+DISP_IP = 0         # no client attached — show how to reach the car
+DISP_IDLE = 1       # client attached, not driving
+DISP_MANUAL = 2     # remote is driving
+DISP_TEXT = 3       # explicit {"c":"t"} override
+
+_disp_want = DISP_IP    # what the panel should show
+_disp_shown = None      # what it currently shows (None = redraw needed)
+_disp_text = ""
+_disp_icon = None
+_disp_ip_line = f"{ip_address}:5000" if wlan else "WiFi failed"
 
 
-def _show(text, header=None):
-    global _display_dirty, _display_text, _display_header
-    _display_text = text
-    if header is not None:
-        _display_header = header
-    _display_dirty = True
+def _set_display(state, text=None, icon=None):
+    """Request a display state. Safe to call on every command."""
+    global _disp_want, _disp_shown, _disp_text, _disp_icon
+    if state == DISP_TEXT:
+        # Text is a payload, not a state: two different strings both mean
+        # DISP_TEXT, so force the redraw rather than relying on the state check.
+        _disp_text = text or ""
+        _disp_icon = icon
+        _disp_shown = None
+    _disp_want = state
 
 
 async def _display_loop():
-    global _display_dirty
+    global _disp_shown
     while True:
-        if _display_dirty:
-            _display_dirty = False
-            display.update_display(header=_display_header or "WS", text=_display_text)
+        want = _disp_want
+        if want != _disp_shown:
+            _disp_shown = want
+            if want == DISP_MANUAL:
+                display.update_display(header="Picar", text="Manual control")
+            elif want == DISP_IDLE:
+                display.update_display(header="Picar", text="Connected - idle")
+            elif want == DISP_TEXT:
+                display.update_display(header="Picar", text=_disp_text,
+                                       icon=_disp_icon)
+            else:
+                display.update_display(header="Picar", text=_disp_ip_line)
         await asyncio.sleep(0.2)
 
 
 # ========== Connection State ==========
 _client_connected = False
-_client_ip = None
 _sensor_push_interval = 0
 _ws_writer = None
 
-IDLE_TIMEOUT = 5
-_last_command_time = 0
+# Timestamps are ticks_ms, not time.time(): time.time() has one-second
+# resolution on this port, which is too coarse for a one-second failsafe.
+IDLE_TIMEOUT_MS = 5000
+_last_control_cmd_ms = 0
 
-# 0 = no client is streaming control frames. Control is pushed best-effort at
-# ~20 Hz with a 250 ms keepalive, so a whole second of silence means the client
-# or the link is gone and the car must not keep its last commanded speed. Only
-# armed once a "ctl" frame has been seen, so the keyboard client — which sets a
-# speed and then legitimately says nothing — is never cut off.
-_last_control_time = 0
-CONTROL_TIMEOUT = 1.0
+# Control is pushed best-effort at ~20 Hz with a 250 ms keepalive, so a whole
+# second of silence means the client or the link is gone and the car must not
+# keep its last commanded speed. Only armed once a "ctl" frame has been seen, so
+# the keyboard client — which sets a speed and then legitimately says nothing —
+# is never cut off.
+CONTROL_TIMEOUT_MS = 1000
+_control_armed = False
+_last_control_frame_ms = 0
 
 
 # ========== WebSocket Frame Helpers ==========
@@ -199,6 +238,51 @@ async def _ws_send(writer, data):
     await writer.drain()
 
 
+# ========== Actuators ==========
+# The lights used to be the client's job: it watched the speed it had just sent
+# and followed up with a separate "l" command, so every direction change cost a
+# second message and a second reply. The car knows its own direction, so it does
+# it here instead — one command in, no extra traffic.
+
+_lights_auto = True    # cleared by an explicit "l" command, restored by "auto"
+_light_target = "off"  # last target applied here; lets redundant writes be skipped
+
+
+def _apply_lights(speed):
+    """Point the lights the way the car is moving."""
+    global _light_target
+    if not _lights_auto:
+        return
+    target = "front" if speed > 0 else "back" if speed < 0 else "off"
+    if target == _light_target:
+        return
+    _light_target = target
+    if target == "front":
+        lights.lights_front()
+    elif target == "back":
+        lights.lights_back()
+    else:
+        lights.lights_off()
+
+
+def _set_motor(speed):
+    """Set the motor speed and follow it with the lights, skipping no-op writes."""
+    if speed != motor.current_motor_speed:
+        motor.current_motor_speed = speed
+        motor.update_motor()
+    _apply_lights(speed)
+
+
+def _touch_control():
+    """Mark remote control activity — drives the display and the idle timer.
+
+    Only the commands that actually move the car count. Status and sensor polls
+    are not "manual control" and must not hold the display awake."""
+    global _last_control_cmd_ms
+    _last_control_cmd_ms = time.ticks_ms()
+    _set_display(DISP_MANUAL)
+
+
 # ========== Command Dispatch (pre-built responses) ==========
 
 def _handle_command(msg):
@@ -223,8 +307,8 @@ def _handle_command(msg):
 
 def _dispatch(cmd):
     """Execute a parsed command and return its pre-built response string."""
-    global _last_command_time, _sensor_push_interval, _last_control_time
-    _last_command_time = time.time()
+    global _sensor_push_interval, _control_armed, _last_control_frame_ms
+    global _lights_auto, _light_target
 
     c = cmd.get("c")
     v = cmd.get("v")
@@ -236,19 +320,16 @@ def _dispatch(cmd):
             # Posted fire-and-forget at ~20 Hz, so this path stays cheap —
             # redundant actuator writes are skipped (the keepalive resends
             # unchanged state) and no reply is built at all when "q" is set.
-            _last_control_time = time.time()
+            _control_armed = True
+            _last_control_frame_ms = time.ticks_ms()
+            _touch_control()
             if "m" in cmd:
-                speed = max(-100, min(100, int(cmd["m"])))
-                if speed != motor.current_motor_speed:
-                    motor.current_motor_speed = speed
-                    motor.update_motor()
+                _set_motor(max(-100, min(100, int(cmd["m"]))))
             if "s" in cmd:
                 angle = max(0, min(180, int(cmd["s"])))
                 if angle != servo.current_angle + 90:
                     servo.current_angle = angle - 90
                     servo.set_servo_angle(angle)
-            _show("M:{} S:{}".format(motor.current_motor_speed,
-                                     servo.current_angle + 90))
             if cmd.get("q"):
                 return None
             return ('{"ok":1,"m":' + str(motor.current_motor_speed) +
@@ -256,27 +337,29 @@ def _dispatch(cmd):
 
         elif c == "m":
             speed = max(-100, min(100, int(v)))
-            motor.current_motor_speed = speed
-            motor.update_motor()
-            _show(f"M:{speed}")
+            _touch_control()
+            _set_motor(speed)
             return '{"ok":1,"m":' + str(speed) + '}'
 
         elif c == "b":
+            _touch_control()
             if hasattr(motor, 'brake'):
                 motor.brake()
             motor.current_motor_speed = 0
-            _show("BRAKE")
+            _apply_lights(0)
             return '{"ok":1,"m":0}'
 
         elif c == "s":
             angle = max(0, min(180, int(v)))
-            servo.current_angle = angle - 90
-            servo.set_servo_angle(angle)
-            _show(f"S:{angle}")
+            _touch_control()
+            if angle != servo.current_angle + 90:
+                servo.current_angle = angle - 90
+                servo.set_servo_angle(angle)
             return '{"ok":1,"s":' + str(angle) + '}'
 
         elif c == "g":
             status = str(v).lower()
+            _touch_control()
             if status == "on":
                 gear.set_gear(True)
             elif status == "off":
@@ -286,11 +369,18 @@ def _dispatch(cmd):
             else:
                 return '{"ok":0,"e":"gear: ' + str(v) + '"}'
             g = 1 if gear.gear_on else 0
-            _show(f"G:{'LOW' if gear.gear_on else 'OFF'}")
             return '{"ok":1,"g":' + str(g) + '}'
 
         elif c == "l":
+            # Kept for driving the lights by hand. Doing so parks automatic mode
+            # so the next motor command cannot immediately override the choice.
             status = str(v).lower()
+            _touch_control()
+            if status == "auto":
+                _lights_auto = True
+                _light_target = None
+                _apply_lights(motor.current_motor_speed)
+                return '{"ok":1,"l":"auto"}'
             if status == "front":
                 lights.lights_front()
             elif status == "back":
@@ -301,14 +391,11 @@ def _dispatch(cmd):
                 lights.lights_off()
             else:
                 return '{"ok":0,"e":"lights: ' + str(v) + '"}'
-            st = lights.get_state()
-            _show(f"L:{st['status']}")
-            return '{"ok":1,"l":"' + st['status'] + '"}'
+            _lights_auto = False
+            return '{"ok":1,"l":"' + status + '"}'
 
         elif c == "t":
-            text = str(v) if v else ""
-            icon = cmd.get("i")
-            display.update_display(header=_client_ip or "WS", text=text, icon=icon)
+            _set_display(DISP_TEXT, str(v) if v else "", cmd.get("i"))
             return '{"ok":1}'
 
         elif c == "st":
@@ -316,7 +403,9 @@ def _dispatch(cmd):
             s = servo.current_angle + 90
             g = 1 if gear.gear_on else 0
             l_st = lights.get_state().get('status', 'off')
-            return '{"ok":1,"st":{"m":' + str(m) + ',"s":' + str(s) + ',"g":' + str(g) + ',"l":"' + l_st + '"}}'
+            la = 1 if _lights_auto else 0
+            return ('{"ok":1,"st":{"m":' + str(m) + ',"s":' + str(s) +
+                    ',"g":' + str(g) + ',"l":"' + l_st + '","la":' + str(la) + '}}')
 
         elif c == "sns":
             data = _read_sensors()
@@ -404,10 +493,15 @@ def _read_sensors():
 # ========== Safety ==========
 
 def _safe_stop():
+    global _light_target
     motor.current_motor_speed = 0
     motor.update_motor()
     if hasattr(motor, 'brake'):
         motor.brake()
+    # Unconditional, not via _apply_lights: a manual override must not leave the
+    # lights burning after the client is gone.
+    lights.lights_off()
+    _light_target = "off"
     print("Safety stop: client disconnected")
 
 
@@ -415,8 +509,8 @@ def _safe_stop():
 
 async def _handle_client(reader, writer):
     """Handle one WebSocket client connection (one at a time)."""
-    global _client_connected, _client_ip, _last_command_time
-    global _sensor_push_interval, _ws_writer, _last_control_time
+    global _client_connected, _last_control_cmd_ms
+    global _sensor_push_interval, _ws_writer, _control_armed, _lights_auto
 
     # ---------- HTTP Upgrade Handshake ----------
     ws_key = None
@@ -451,13 +545,13 @@ async def _handle_client(reader, writer):
 
     # ---------- Connection established ----------
     _client_connected = True
-    _client_ip = "client"
     _ws_writer = writer
-    _last_command_time = time.time()
+    _last_control_cmd_ms = time.ticks_ms()
     _sensor_push_interval = 0
+    _lights_auto = True   # a manual override does not outlive the client that set it
 
     print(f"WebSocket connected")
-    _show("Connected", header="Raw WS")
+    _set_display(DISP_IDLE)
     led.on()
 
     push_task = asyncio.create_task(_sensor_push_loop(writer))
@@ -501,7 +595,7 @@ async def _handle_client(reader, writer):
         _client_connected = False
         _ws_writer = None
         _sensor_push_interval = 0
-        _last_control_time = 0    # disarm the watchdog for the next client
+        _control_armed = False    # disarm the watchdog for the next client
         push_task.cancel()
         _safe_stop()
 
@@ -517,12 +611,9 @@ async def _handle_client(reader, writer):
             pass
 
         print("WebSocket disconnected")
-        _show("Waiting...", header="Disconnected")
         led.off()
-
-        await asyncio.sleep(2)
         if not _client_connected:
-            _show(f"{ip_address}:5000", header="Raw WS")
+            _set_display(DISP_IP)
 
 
 # ========== Sensor Push ==========
@@ -551,31 +642,35 @@ async def _control_watchdog():
     Control frames are best-effort pushes, so losing the link no longer produces
     a clean disconnect that _safe_stop can catch — the car would just keep its
     last commanded speed. Arms itself only after a "ctl" frame has been seen
-    (see CONTROL_TIMEOUT)."""
-    global _last_control_time
+    (see CONTROL_TIMEOUT_MS)."""
+    global _control_armed
     while True:
         await asyncio.sleep(0.2)
-        if not _last_control_time:
+        if not _control_armed:
             continue
-        if time.time() - _last_control_time >= CONTROL_TIMEOUT:
-            _last_control_time = 0   # re-arms on the next control frame
+        if time.ticks_diff(time.ticks_ms(),
+                           _last_control_frame_ms) >= CONTROL_TIMEOUT_MS:
+            _control_armed = False   # re-arms on the next control frame
             if motor.current_motor_speed != 0:
-                motor.current_motor_speed = 0
-                motor.update_motor()
-                _show("Link lost: STOP")
+                _set_motor(0)
                 print("Control watchdog: no frames, motor stopped")
 
 
 # ========== Idle Display Watcher ==========
 
 async def _idle_watcher():
-    global _last_command_time
+    """Drop the display back to "idle" once the remote goes quiet.
+
+    Only demotes from "manual control": a text the client asked for stays up
+    until it starts driving again. _set_display is idempotent and the display
+    task only redraws on a change, so this can fire every second for free."""
     while True:
         await asyncio.sleep(1)
-        if _client_connected and _last_command_time:
-            if time.time() - _last_command_time >= IDLE_TIMEOUT:
-                _last_command_time = 0
-                _show("Idle")
+        if not _client_connected or _disp_want != DISP_MANUAL:
+            continue
+        if time.ticks_diff(time.ticks_ms(),
+                           _last_control_cmd_ms) >= IDLE_TIMEOUT_MS:
+            _set_display(DISP_IDLE)
 
 
 # ========== Server ==========
@@ -584,10 +679,9 @@ async def start_server():
     print("Starting Raw WebSocket Server...")
     if wlan and wlan.isconnected():
         print(f"WebSocket endpoint: ws://{ip_address}:5000")
-        _show(f"{ip_address}:5000", header="Raw WS")
     else:
         print("WiFi not connected")
-        _show("WiFi Failed", header="Raw WS")
+    _set_display(DISP_IP)
 
     # Start background tasks
     asyncio.create_task(lights.monitor())

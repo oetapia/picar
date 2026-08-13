@@ -10,7 +10,7 @@ Controls:
     Square:             Brake (hard stop)
     X:                  Centre steering
     Triangle:           Toggle gear
-    Circle:             Cycle lights (off -> front -> back -> both)
+    Circle:             Cycle lights (auto -> off -> front -> back -> both)
     PS button:          Quit
 
 Usage:
@@ -48,8 +48,11 @@ class PicarPS4Controller:
         self.right_angle = right_angle
         self.current_speed = 0
         self.current_angle = 90
-        self.light_state = "off"
-        self._light_cycle = ["off", "front", "back", "both"]
+        # "auto" hands the lights back to the car, which points them the way it
+        # is moving. The other entries take manual control until it comes round
+        # to "auto" again.
+        self.light_state = "auto"
+        self._light_cycle = ["auto", "off", "front", "back", "both"]
         self._running = False
 
     def connect(self):

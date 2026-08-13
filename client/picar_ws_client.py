@@ -79,8 +79,6 @@ class PicarWsClient:
         self._receive_task = None
         self._pending_responses: asyncio.Queue = None
         self._lock = asyncio.Lock()
-        self.auto_lights = True
-        self._last_light_target = ""
 
         # Connection stats
         self.reconnect_count = 0
@@ -223,27 +221,15 @@ class PicarWsClient:
     # ========== Motor Control ==========
 
     async def set_motor(self, speed: int) -> dict:
-        """Set motor speed (-100 to 100)."""
+        """Set motor speed (-100 to 100).
+
+        The lights follow the motor on the Pico, so there is no second command
+        here — see main_raw.py. Use set_lights() to drive them by hand."""
         speed = max(-100, min(100, int(speed)))
-        result = await self._send_command({"c": "m", "v": speed})
-
-        # Auto lights (non-blocking)
-        if self.auto_lights:
-            if speed > 0:
-                target = "front"
-            elif speed < 0:
-                target = "back"
-            else:
-                target = "off"
-            if target != self._last_light_target:
-                self._last_light_target = target
-                asyncio.create_task(self._send_command({"c": "l", "v": target}))
-
-        return result
+        return await self._send_command({"c": "m", "v": speed})
 
     async def brake(self) -> dict:
         """Active brake — immediately stop motor."""
-        self._last_light_target = "off"
         return await self._send_command({"c": "b"})
 
     async def stop(self) -> dict:
@@ -274,7 +260,8 @@ class PicarWsClient:
     # ========== Lights Control ==========
 
     async def set_lights(self, status: str) -> dict:
-        """Set lights: front/back/both/off."""
+        """Set lights: front/back/both/off, or "auto" to hand them back to the
+        car (which points them the way it is moving)."""
         return await self._send_command({"c": "l", "v": status})
 
     async def lights_front(self) -> dict:
@@ -288,6 +275,11 @@ class PicarWsClient:
 
     async def lights_off(self) -> dict:
         return await self.set_lights("off")
+
+    async def lights_auto(self) -> dict:
+        """Hand the lights back to the car: front when moving forward, back when
+        reversing, off when stopped."""
+        return await self.set_lights("auto")
 
     # ========== Display ==========
 
@@ -407,7 +399,6 @@ class PicarWsClientSync:
         self._async_client = PicarWsClient(ip, port)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
-        self.auto_lights = True
         self._latest_sensors: Optional[dict] = None
         self._sensor_lock = threading.Lock()
 
@@ -464,7 +455,6 @@ class PicarWsClientSync:
 
     # ========== Motor ==========
     def set_motor(self, speed: int) -> dict:
-        self._async_client.auto_lights = self.auto_lights
         return self._call(self._async_client.set_motor(speed))
 
     def brake(self) -> dict:
@@ -502,6 +492,9 @@ class PicarWsClientSync:
 
     def lights_off(self) -> dict:
         return self._call(self._async_client.lights_off())
+
+    def lights_auto(self) -> dict:
+        return self._call(self._async_client.lights_auto())
 
     # ========== Display ==========
     def send_text(self, text: str, icon: str = None) -> dict:
@@ -628,9 +621,11 @@ def main():
         state['right_angle'] = min(180, max(90, state['right_angle'] + delta))
         return {"message": f"Steering: L={state['left_angle']}° R={state['right_angle']}°"}
 
-    def toggle_auto_lights():
-        client.auto_lights = not client.auto_lights
-        return {"message": f"Auto lights: {'ON' if client.auto_lights else 'OFF'}"}
+    def lights_auto():
+        # The car drives the lights itself; this just hands them back to it after
+        # F/B/L/O have taken manual control.
+        client.lights_auto()
+        return {"message": "Lights: auto (follow motor)"}
 
     commands = {
         "w": ("Forward",           lambda: client.set_motor(state['speed'])),
@@ -649,7 +644,7 @@ def main():
         "b": ("Lights back",       lambda: client.lights_back()),
         "l": ("Lights both",       lambda: client.lights_both()),
         "o": ("Lights off",        lambda: client.lights_off()),
-        "t": ("Toggle auto lights", lambda: toggle_auto_lights()),
+        "t": ("Lights auto",       lambda: lights_auto()),
         "g": ("Toggle gear",       lambda: client.toggle_gear()),
         "?": ("Status",            lambda: client.status()),
         "1": ("Accelerometer",     lambda: client.get_accelerometer()),
@@ -666,7 +661,7 @@ def main():
     print(f"  Server:   ws://{args.ip}:{args.port}/ws")
     print(f"\nMovement: W/S=Fwd/Rev  A/D=Left/Right  C=Centre  SPACE=Stop  X=Brake")
     print(f"Tuning:   +/-=Speed({state['speed']})  [/]=Steering")
-    print(f"Lights:   F=Front  B=Back  L=Both  O=Off  T=AutoToggle")
+    print(f"Lights:   F=Front  B=Back  L=Both  O=Off  T=Auto(follow motor)")
     print(f"Gear:     G=Toggle")
     print(f"Sensors:  1=Accel  2=ToF  3=Ultra  4=All  ?=Status")
     print(f"Exit:     Q=Quit")

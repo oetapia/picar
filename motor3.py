@@ -37,6 +37,11 @@ IN2.freq(15000)
 
 current_motor_speed = 0  # signed: + = forward, - = reverse
 
+# Redraw the OLED (and print) on every speed change. A full 128x32 redraw is
+# blocking I2C work, so a caller that streams speed changes — main_raw.py — turns
+# this off and drives the display on its own schedule.
+show_status = True
+
 
 def update_motor():
     global current_motor_speed
@@ -68,7 +73,8 @@ def update_motor():
             IN1.duty_u16(0)
             IN2.duty_u16(speed_value)
 
-    display_motor_status()
+    if show_status:
+        display_motor_status()
 
 
 def brake():
